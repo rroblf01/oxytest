@@ -46,6 +46,31 @@ import oxytest as pytest
 pytest.main(["-v", "tests/"])
 ```
 
+### 5. Migración automática con `oxytest migrate`
+
+Oxytest incluye una herramienta de migración integrada que reescribe tus imports automáticamente:
+
+```bash
+# Previsualizar cambios (dry run)
+oxytest migrate src/ --dry-run
+
+# Realizar migración (pytest → oxytest)
+oxytest migrate src/
+
+# Migración reversa (oxytest → pytest)
+oxytest migrate src/ --reverse
+
+# Solo verificar — código 1 si quedan imports de pytest
+oxytest migrate src/ --check
+```
+
+La herramienta maneja:
+- `import pytest` → `import oxytest as pytest`
+- `from pytest import ...` → `from oxytest import ...`
+- `from pytest import approx, raises` → (imports multi-módulo)
+- Aliases (`import pytest as pt` → `import oxytest as pt`)
+- Omite comentarios y strings
+
 ## Qué Funciona de Inmediato
 
 | Característica | Estado |
@@ -58,15 +83,21 @@ pytest.main(["-v", "tests/"])
 | `pytest.mark.skip()` | ✅ |
 | `pytest.mark.skipif()` | ✅ |
 | `pytest.mark.xfail()` | ✅ |
+| `pytest.mark.usefixtures()` | ✅ |
 | `pytest.skip()` | ✅ |
 | `pytest.fail()` | ✅ |
 | `pytest.importorskip()` | ✅ |
 | `pytest.set_trace()` | ✅ |
 | Fixture `tmp_path` | ✅ |
 | Fixture `capsys` | ✅ |
+| Fixture `capfd` | ✅ |
 | Fixture `monkeypatch` | ✅ |
 | `conftest.py` | ✅ |
 | Clases de tests | ✅ |
+| Yield fixtures con teardown | ✅ |
+| Fixtures `autouse=True` | ✅ |
+| Reescritura de asserts con diffs | ✅ |
+| Sistema de plugins (pytest_addoption, pytest_configure, etc.) | ✅ |
 | Flags `-v`, `-q`, `-x` | ✅ |
 | Filtro `-k` | ✅ |
 | Ejecución paralela `-n` (integrada) | ✅ |
@@ -92,11 +123,7 @@ oxytest -n 4
 
 Oxytest usa escaneo AST (Árbol de Sintaxis Abstracta) en lugar de importar módulos. Esto hace que el descubrimiento sea **10-100x más rápido** para proyectos grandes. La desventaja es que algunos patrones de generación dinámica de tests (como atributos `__test__` en `__init__`) pueden no ser descubiertos.
 
-### 3. Sin sistema de plugins aún
-
-Los plugins de pytest (como `pytest-cov`, `pytest-django`) aún no son soportados. Planeamos añadir soporte para plugins en una versión futura.
-
-### 4. Sin flag `--coverage`
+### 3. Sin flag `--coverage`
 
 El flag `--coverage` no está implementado. Usa `pytest-cov` con pytest para cobertura, o una herramienta de cobertura directamente.
 
@@ -110,12 +137,28 @@ El flag `--coverage` no está implementado. Usa `pytest-cov` con pytest para cob
 | `-x` | `-x` | ✅ |
 | `-k` | `-k` | ✅ |
 | `--tb=short` | `--tb=short` | ✅ |
+| `--tb=long` | `--tb=long` | ✅ |
+| `--tb=native` | `--tb=native` | ✅ |
+| `--tb=no` | `--tb=no` | ✅ |
 | `--junitxml` | `--junitxml` | ✅ |
 | `-s` | `-s` | ✅ |
 | `--maxfail` | `--maxfail` | ✅ |
 | `-n` | `-n` | Integrado, sin plugin |
+| `--ignore` | `--ignore` | ✅ |
+| `--collect-only` | `--collect-only` (+ `--co`) | ✅ |
+| `--durations` | `--durations` | ✅ |
+| `-r` | `-r` | ✅ |
+| `--showlocals` | `--showlocals` | ✅ |
+| `--strict-markers` | `--strict-markers` | ✅ |
+| `--rootdir` | `--rootdir` | ✅ |
+| `--fixtures` | `--fixtures` | ✅ |
+| `--markers` | `--markers` | ✅ |
+| `--setup-show` | `--setup-show` | ✅ |
+| `--cache-clear` | `--cache-clear` | ✅ |
+| `--lf` | `--lf` | ✅ |
+| `--ff` | `--ff` | ✅ |
+| `-p` plugins | `-p` plugins | ✅ Integrado, sin plugin |
 | `--coverage` | — | No soportado |
-| `-p` plugins | — | Aún no soportado |
 | `--pdb` | — | Usar `pytest.set_trace()` |
 
 ## Solución de Problemas
@@ -127,4 +170,4 @@ Asegúrate de que tus archivos de test sigan la convención: `test_*.py` o `*_te
 Oxytest soporta fixtures integrados (`tmp_path`, `capsys`, `monkeypatch`) y fixtures definidos con `@pytest.fixture`. Asegúrate de que tu `conftest.py` esté en el directorio correcto.
 
 ### ¿Error de importación?
-Oxytest ejecuta tests en el mismo proceso. Si tienes efectos secundario a nivel de módulo en tus archivos de test, pueden comportarse de manera diferente. Usa `conftest.py` para configuración compartida.
+Oxytest ejecuta tests en el mismo proceso. Si tienes efectos secundarios a nivel de módulo en tus archivos de test, pueden comportarse de manera diferente. Usa `conftest.py` para configuración compartida.

@@ -66,6 +66,9 @@ class FixtureManager:
                 self.register(obj)
 
     def resolve(self, name: str, scope: str = "function") -> Any:
+        setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
+        if setup_show:
+            os.write(2, f"SETUP    {name}\n".encode())
         if name in self._cache:
             cached_scope = self._active_scopes.get(name)
             if cached_scope == "session" or cached_scope == scope:
@@ -83,6 +86,8 @@ class FixtureManager:
             except StopIteration:
                 yielded = None
             self._generators[name] = value
+            if setup_show:
+                os.write(2, f"  TEARDOWN {name} (yield)\n".encode())
             value = yielded
 
         if hasattr(value, "start"):
@@ -96,12 +101,15 @@ class FixtureManager:
         return value
 
     def cleanup(self, scope: str = "function"):
+        setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
         for name, gen in self._generators.items():
             try:
                 next(gen)
             except StopIteration:
                 pass
             gen.close()
+            if setup_show:
+                os.write(2, f"  TEARDOWN {name} (yield)\n".encode())
         self._generators.clear()
         for value in self._resolved_fixtures:
             if hasattr(value, "stop"):
@@ -109,6 +117,8 @@ class FixtureManager:
                     value.stop()
                 except Exception:
                     pass
+                if setup_show and hasattr(value, "__class__"):
+                    os.write(2, f"  TEARDOWN {value.__class__.__name__} (stop)\n".encode())
         self._resolved_fixtures.clear()
         for name, value in self._cache.items():
             if hasattr(value, "stop"):

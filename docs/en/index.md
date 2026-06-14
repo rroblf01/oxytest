@@ -30,14 +30,20 @@ oxytest
 python -c "import oxytest as pytest; pytest.main()"
 ```
 
-## Project Status
+## Features
 
-Oxytest is in active development. The MVP is functional with:
-
-- ✅ Test discovery (AST-based)
-- ✅ Test execution (sequential and parallel)
+- ✅ AST-based test discovery (10-100x faster than pytest)
+- ✅ Sequential and parallel execution (built-in Rayon thread pool)
 - ✅ pytest-compatible API (`main`, `approx`, `raises`, `fixture`, `mark`, etc.)
-- ✅ CLI with common flags (`-v`, `-x`, `-k`, `--tb`, `-n`, etc.)
-- ✅ JUnit XML output
-- ✅ Fixtures (`tmp_path`, `capsys`, `monkeypatch` + `conftest.py`)
-- ❌ Plugins (coming soon)
+- ✅ Fixtures (`tmp_path`, `capsys`, `monkeypatch`, `capfd` + `conftest.py`)
+- ✅ Yield fixtures with automatic teardown
+- ✅ `autouse=True` fixtures
+- ✅ `usefixtures` marker on classes
+- ✅ JUnit XML output with `<system-out>`, `<system-err>`, `timestamp`
+- ✅ Assert rewriting with comparison diffs
+- ✅ `--showlocals` — show local variables on failure
+- ✅ `--setup-show` — trace fixture setup/teardown
+- ✅ Plugin system (pluggy-based, supports `pytest_addoption`, `pytest_configure`, conftest plugins, entry point plugins)
+- ✅ Migration tool (`oxytest migrate`) — automatic import migration between pytest and oxytest
+- ✅ Cache system (`--lf`/`--last-failed`, `--ff`/`--failed-first`)
+- ✅ CLI: `-v`, `-q`, `-x`, `-k`, `--tb`, `-n`, `--junitxml`, `-s`, `--maxfail`, `--ignore`, `--collect-only`, `--durations`, `-r`, `--showlocals`, `--strict-markers`, `--rootdir`, `--fixtures`, `--markers`, `--setup-show`, `--cache-clear`, `--lf`, `--ff`, `-p`

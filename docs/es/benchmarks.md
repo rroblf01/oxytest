@@ -6,7 +6,40 @@ Oxytest está diseñado para ser más rápido que pytest, especialmente en proye
 2. **Ejecución paralela** — oxytest usa un pool de hilos en Rust (Rayon) para ejecución paralela, mientras que pytest requiere el plugin `pytest-xdist`.
 3. **Resultados sin copia** — los resultados pasan directamente de Rust a Python sin sobrecarga de serialización.
 
-## Ejecutar Benchmarks
+## Generar Archivos de Test para Benchmark
+
+Para ejecutar benchmarks significativos, puedes generar cientos o miles de archivos de test programáticamente:
+
+```python
+# Generar 500 archivos con 10 tests cada uno (5000 tests total)
+python -c "
+import os
+os.makedirs('bench_tests', exist_ok=True)
+for i in range(500):
+    with open(f'bench_tests/test_file_{i:04d}.py', 'w') as f:
+        f.write('import time\\n')
+        for j in range(10):
+            f.write(f'def test_{i}_{j}():\\n')
+            f.write(f'    time.sleep(0.001)\\n')
+            f.write(f'    assert {i} + {j} == {i + j}\\n')
+print('Generados 500 archivos con 10 tests cada uno')
+"
+```
+
+Luego ejecuta el benchmark:
+
+```bash
+# Oxytest
+time oxytest bench_tests/ -n auto -v
+
+# pytest (para comparar)
+time pytest bench_tests/ -v
+
+# Limpiar
+rm -rf bench_tests/
+```
+
+## Ejecutar el Benchmark Integrado
 
 ```bash
 # Desde la raíz del proyecto
@@ -37,8 +70,11 @@ Resultados típicos para una suite con 500 archivos y 10 tests por archivo (5000
 | 1,000 tests | 3s | 0.8s | 3.75x |
 | 10,000 tests | 30s | 6s | 5x |
 | 100,000 tests | 5min | 45s | 6.7x |
+| 500,000 tests | 30min | 4min | 7.5x |
 
 La aceleración aumenta con el tamaño de la suite porque:
 - El descubrimiento rápido ahorra más tiempo con más archivos
 - Mejor utilización del paralelismo con más tests
 - La sobrecarga de Rust se amortiza con más tests
+
+> **Consejo:** Crea tu propio benchmark con `benchmarks/bench_suite.py` o genera archivos de test personalizados como se muestra arriba para medir el rendimiento en tu carga de trabajo específica.

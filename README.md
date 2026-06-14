@@ -16,6 +16,8 @@ pytest is great, but it can be slow for large projects. Oxytest is a drop-in rep
 | Discovery | Import-based (slow) | **AST-based** (fast) |
 | Parallel | Requires `pytest-xdist` | **Built-in** (Rayon) |
 | Language | Python | **Python + Rust** |
+| Assert rewriting | Built-in | **Built-in** (comparison diffs) |
+| Plugin system | Built-in | **Built-in** (pluggy) |
 | Drop-in compatible | — | **100%** |
 
 ## Quick Start
@@ -48,6 +50,24 @@ oxytest -x
 
 # Filter by keyword
 oxytest -k "user or math"
+
+# Show local variables on failure
+oxytest --showlocals
+
+# Trace fixture setup/teardown
+oxytest --setup-show
+
+# Run only previously failed tests
+oxytest --lf
+
+# Show slowest tests
+oxytest --durations 5
+
+# Full summary
+oxytest -rA
+
+# Migrate imports from pytest to oxytest
+oxytest migrate src/ --dry-run
 ```
 
 ## Python API
@@ -70,9 +90,34 @@ def data():
 @pytest.mark.parametrize("x,expected", [(1, 2), (3, 6)])
 def test_double(x, expected):
     assert x * 2 == expected
+
+# Plugin API
+from oxytest import hookimpl
+@hookimpl
+def pytest_addoption(parser):
+    parser.addoption("--my-flag", action="store_true")
 ```
 
 ## Benchmarks
+
+Generate hundreds or thousands of test files to benchmark:
+
+```bash
+# Create 500 test files with 10 tests each
+python -c "
+import os
+os.makedirs('bench_tests', exist_ok=True)
+for i in range(500):
+    with open(f'bench_tests/test_file_{i:04d}.py', 'w') as f:
+        f.write('import time\\n')
+        for j in range(10):
+            f.write(f'def test_{i}_{j}():\\n')
+            f.write(f'    time.sleep(0.001)\\n')
+            f.write(f'    assert {i} + {j} == {i + j}\\n')
+"
+# Benchmark with oxytest
+time oxytest bench_tests/ -n auto -v
+```
 
 | Suite Size | pytest | oxytest (parallel) | Speedup |
 |-----------|--------|-------------------|---------|

@@ -134,7 +134,7 @@ def test_main_version():
 def test_version_string():
     from oxytest import __version__
     assert isinstance(__version__, str)
-    assert __version__ == "0.1.0"
+    assert __version__ == "1.0.0"
 
 
 def test_test_item_repr():

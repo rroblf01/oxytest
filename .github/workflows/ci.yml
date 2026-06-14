@@ -65,11 +65,14 @@ jobs:
 
   test-windows:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
@@ -91,11 +94,14 @@ jobs:
 
   test-macos:
     runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2

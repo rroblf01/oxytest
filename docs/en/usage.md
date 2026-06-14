@@ -15,8 +15,26 @@ Options:
   --junitxml=PATH     Generate JUnit XML report
   -s                  Don't capture stdout/stderr
   --maxfail=N         Stop after N failures
+  -p PLUGIN           Load plugin (can be used multiple times)
+  --ignore=PATH       Ignore test path (can be used multiple times)
+  --collect-only, --co  Only collect tests, don't run
+  --durations=N       Show N slowest tests
+  -r[chars]           Show extra test summary (-rA, -rf, -rs, ...)
+  --showlocals        Show local variables in tracebacks
+  --strict-markers    Unknown markers cause errors
+  --rootdir=PATH      Set root directory for discovery
+  --fixtures          List available fixtures
+  --markers           List registered markers
+  --setup-show        Print fixture setup/teardown
+  --cache-clear       Clear cache before run
+  --lf, --last-failed  Run only tests that failed last time
+  --ff, --failed-first Run failed tests first, then rest
   --version           Show version
   -h, --help          Show this help message
+
+Subcommands:
+  migrate             Automatically migrate imports between pytest and oxytest
+                      (e.g., `oxytest migrate --dry-run`)
 ```
 
 ## Examples
@@ -37,6 +55,9 @@ oxytest -q
 # Run in parallel with 8 workers
 oxytest -n 8
 
+# Auto-detect CPU count
+oxytest -n auto
+
 # Stop after first failure
 oxytest -x
 
@@ -49,11 +70,56 @@ oxytest --junitxml report.xml
 # Run with short tracebacks (default)
 oxytest --tb=short
 
+# Full tracebacks
+oxytest --tb=long
+
 # Suppress traceback output
 oxytest --tb=no
 
+# Show local variables on failure
+oxytest --showlocals
+
+# Show fixture setup/teardown
+oxytest --setup-show
+
+# Only collect tests (don't run)
+oxytest --collect-only
+oxytest --co                         # shorthand
+
+# Show 5 slowest tests
+oxytest --durations 5
+
+# Show extra summary (-rA = all, -rf = failures, -rs = skipped)
+oxytest -rA
+
+# Ignore specific paths
+oxytest --ignore=tests/legacy
+
+# Run only previously failed tests
+oxytest --lf
+oxytest --last-failed
+
+# Run failed tests first, then the rest
+oxytest --ff
+oxytest --failed-first
+
+# List available fixtures
+oxytest --fixtures
+
+# List registered markers
+oxytest --markers
+
+# Load a plugin
+oxytest -p myplugin
+
 # Combine flags
 oxytest -v -n 4 -x tests/
+
+# Migrate imports from pytest to oxytest
+oxytest migrate src/
+oxytest migrate --dry-run             # preview only
+oxytest migrate --reverse             # oxytest → pytest
+oxytest migrate --check               # error if any imports found
 ```
 
 ## Python API
@@ -101,6 +167,31 @@ def database():
 
 def test_query(database):
     assert database.query("SELECT 1") == 1
+
+# yield fixture with teardown
+@pytest.fixture
+def resource():
+    obj = acquire()
+    yield obj
+    obj.release()
+
+# autouse fixture
+@pytest.fixture(autouse=True)
+def setup():
+    print("runs before every test")
+
+# Plugin API
+from oxytest import hookimpl, hookspec
+
+@hookimpl
+def pytest_addoption(parser):
+    parser.addoption("--my-flag", action="store_true", help="My custom flag")
+
+@hookimpl
+def pytest_configure(config):
+    value = config.getoption("--my-flag")
+    if value:
+        print("Custom flag enabled!")
 ```
 
 ## Exit Codes

@@ -300,11 +300,15 @@ class TestReport:
 
 
 class TerminalReporter:
-    def __init__(self, verbose: bool = False, quiet: bool = False, tb_style: str = "short"):
+    def __init__(self, verbose: bool = False, quiet: bool = False, tb_style: str = "short",
+                 showlocals: bool = False, setup_show: bool = False):
         self.verbose = verbose
         self.quiet = quiet
         self.tb_style = tb_style
+        self.showlocals = showlocals
+        self.setup_show = setup_show
         self.stats = defaultdict(int)
+        self.results: List[TestResult] = []
         self.failures: List[TestResult] = []
         self.errors: List[TestResult] = []
         self.skipped: List[TestResult] = []
@@ -319,6 +323,7 @@ class TerminalReporter:
             print("=" * 60)
 
     def test_result(self, result: TestResult):
+        self.results.append(result)
         if result.passed:
             self.stats["passed"] += 1
         else:
@@ -359,6 +364,8 @@ class TerminalReporter:
                     print(result.output)
                 if result.error_output:
                     print(result.error_output, file=sys.stderr)
+                if result.error:
+                    print(result.error)
                 if result.traceback:
                     lines = result.traceback.split("\n")
                     if self.tb_style == "short":
@@ -368,8 +375,7 @@ class TerminalReporter:
                         else:
                             print("\n".join(lines[-8:]))
                     elif self.tb_style == "no":
-                        if result.error:
-                            print(result.error)
+                        pass  # error already printed above
                     else:
                         print(result.traceback)
 
@@ -447,6 +453,19 @@ def _parse_args(args: List[str]) -> dict:
     "maxfail": None,
     "version": False,
     "plugins": [],
+    "ignore": [],
+    "collect_only": False,
+    "durations": None,
+    "report_summary": False,
+    "showlocals": False,
+    "strict_markers": False,
+    "rootdir": None,
+    "fixtures_list": False,
+    "markers_list": False,
+    "setup_show": False,
+    "cache_clear": False,
+    "lf": False,
+    "ff": False,
     }
 
     i = 0
@@ -486,6 +505,35 @@ def _parse_args(args: List[str]) -> dict:
         elif arg == "-p" and i + 1 < len(args):
             i += 1
             parsed["plugins"].append(args[i])
+        elif arg == "--ignore" and i + 1 < len(args):
+            i += 1
+            parsed["ignore"].append(args[i])
+        elif arg in ("--collect-only", "--co"):
+            parsed["collect_only"] = True
+        elif arg == "--durations" and i + 1 < len(args):
+            i += 1
+            parsed["durations"] = int(args[i])
+        elif arg.startswith("-r") and len(arg) > 2:
+            parsed["report_summary"] = arg[2:]
+        elif arg == "--showlocals":
+            parsed["showlocals"] = True
+        elif arg == "--strict-markers":
+            parsed["strict_markers"] = True
+        elif arg == "--rootdir" and i + 1 < len(args):
+            i += 1
+            parsed["rootdir"] = args[i]
+        elif arg == "--fixtures":
+            parsed["fixtures_list"] = True
+        elif arg == "--markers":
+            parsed["markers_list"] = True
+        elif arg == "--setup-show":
+            parsed["setup_show"] = True
+        elif arg in ("--lf", "--last-failed"):
+            parsed["lf"] = True
+        elif arg in ("--ff", "--failed-first"):
+            parsed["ff"] = True
+        elif arg == "--cache-clear":
+            parsed["cache_clear"] = True
         elif arg in ("-h", "--help"):
             parsed["help"] = True
         elif arg.startswith("-"):
@@ -512,6 +560,19 @@ def _run_tests(
     nocapture: bool = False,
     maxfail: Optional[int] = None,
     config: Optional['Config'] = None,
+    ignore: Optional[List[str]] = None,
+    collect_only: bool = False,
+    durations: Optional[int] = None,
+    report_summary: Optional[str] = None,
+    showlocals: bool = False,
+    strict_markers: bool = False,
+    rootdir: Optional[str] = None,
+    fixtures_list: bool = False,
+    markers_list: bool = False,
+    setup_show: bool = False,
+    cache_clear: bool = False,
+    lf: bool = False,
+    ff: bool = False,
 ) -> int:
     pm = None
     if config is not None:
@@ -519,14 +580,22 @@ def _run_tests(
         pm = get_plugin_manager()
         pm.hook.pytest_sessionstart(session=config)
 
+    if cache_clear:
+        _clear_cache()
+
+    root_paths = [rootdir] if rootdir else paths
+
     all_tests = []
-    for path in paths:
+    for path in root_paths:
         tests = discover_tests(path, keyword)
+        if ignore:
+            tests = [t for t in tests if not _is_ignored(t.path, ignore)]
         all_tests.extend(tests)
         _load_conftest(path, config=config)
 
     if not all_tests:
-        print("No tests found")
+        if not collect_only:
+            print("No tests found")
         return 0
 
     if pm:
@@ -534,22 +603,67 @@ def _run_tests(
             session=config, config=config, items=all_tests
         )
 
-    reporter = TerminalReporter(verbose=verbose, quiet=quiet, tb_style=tb_style)
+    all_tests = _expand_parametrize(all_tests)
+
+    if strict_markers:
+        _validate_markers(all_tests)
+
+    if fixtures_list:
+        _list_fixtures()
+        return 0
+
+    if markers_list:
+        _list_markers()
+        return 0
+
+    if collect_only:
+        _print_collected(all_tests, verbose=verbose)
+        return 0
+
+    reporter = TerminalReporter(
+        verbose=verbose, quiet=quiet, tb_style=tb_style,
+        showlocals=showlocals, setup_show=setup_show,
+    )
     reporter.start()
 
     if verbose:
         print(f"\nDiscovered {len(all_tests)} test(s)")
         print()
 
-    all_tests = _expand_parametrize(all_tests)
     if verbose:
         print(f"After parametrize expansion: {len(all_tests)} test(s)")
         print()
+
+    if setup_show:
+        import os as _os
+        _os.environ["OXYTEST_SETUP_SHOW"] = "1"
+    if showlocals:
+        import os as _os
+        _os.environ["OXYTEST_SHOWLOCALS"] = "1"
+
+    # Cache support: --lf (last failed) and --ff (failed first)
+    if lf or ff:
+        last_failed = _read_lastfailed()
+        lf_tests = [t for t in all_tests if (t.path, t.name) in last_failed]
+        passed_tests = [t for t in all_tests if (t.path, t.name) not in last_failed]
+        if lf:
+            all_tests = lf_tests
+        elif ff:
+            all_tests = lf_tests + passed_tests
+        if verbose and lf and lf_tests:
+            print(f"Running {len(lf_tests)} previously failed test(s)")
+        elif verbose and ff:
+            print(f"Running {len(lf_tests)} failed + {len(passed_tests)} passed")
 
     if num_workers is None or num_workers == 1:
         results = run_tests_sequential(all_tests, nocapture=nocapture)
     else:
         results = run_tests(all_tests, num_workers, nocapture=nocapture)
+
+    if setup_show:
+        _os.environ.pop("OXYTEST_SETUP_SHOW", None)
+    if showlocals:
+        _os.environ.pop("OXYTEST_SHOWLOCALS", None)
 
     for result in results:
         reporter.test_result(result)
@@ -559,6 +673,17 @@ def _run_tests(
             break
 
     reporter.finish()
+
+    if lf or ff:
+        _write_lastfailed(results)
+    elif not lf and results:
+        _write_lastfailed(results)
+
+    if durations:
+        _print_durations(reporter.results, durations)
+
+    if report_summary:
+        _print_summary(reporter, report_summary)
 
     if junitxml:
         _write_junitxml(reporter, junitxml)
@@ -571,6 +696,196 @@ def _run_tests(
     return exitcode
 
 
+def _is_ignored(path: str, ignore_patterns: List[str]) -> bool:
+    """Check if a test path matches any ignore pattern."""
+    for pat in ignore_patterns:
+        if path.startswith(pat) or pat in path:
+            return True
+    return False
+
+
+def _clear_cache():
+    """Remove .pytest_cache/ directory."""
+    import shutil
+    cache_dir = ".pytest_cache"
+    if os.path.isdir(cache_dir):
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def _format_assert_detail(source_line: str, filename: str, lineno: int) -> str:
+    """Extract values from an assertion expression for a helpful error message."""
+    import ast
+    try:
+        tree = ast.parse(source_line, filename=filename)
+    except SyntaxError:
+        return ""
+    if not isinstance(tree, ast.Module) or not tree.body:
+        return ""
+    stmt = tree.body[0]
+    if not isinstance(stmt, ast.Assert):
+        return source_line
+    test = stmt.test
+    parts = [source_line]
+    if isinstance(test, ast.Compare) and len(test.ops) == 1:
+        left = test.left
+        right = test.comparators[0]
+        op = test.ops[0]
+        op_str = {
+            ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=",
+            ast.Gt: ">", ast.GtE: ">=", ast.Is: "is", ast.IsNot: "is not",
+            ast.In: "in", ast.NotIn: "not in",
+        }.get(type(op), "")
+        if op_str:
+            parts.append(f"{ast.unparse(left)} {op_str} {ast.unparse(right)}")
+    elif isinstance(test, ast.Call) and isinstance(test.func, ast.Name) and test.func.id in ("isinstance", "hasattr"):
+        parts.append(ast.unparse(test))
+    else:
+        parts.append(ast.unparse(test))
+    return "\n".join(parts)
+
+
+def _cache_dir() -> str:
+    return os.path.join(".pytest_cache", "oxytest")
+
+
+def _lastfailed_path() -> str:
+    return os.path.join(_cache_dir(), "lastfailed")
+
+
+def _read_lastfailed() -> set:
+    """Read set of (path, name) tuples that failed last run."""
+    import json
+    lf_path = _lastfailed_path()
+    if not os.path.isfile(lf_path):
+        return set()
+    try:
+        with open(lf_path) as f:
+            data = json.load(f)
+        return set(tuple(item) for item in data)
+    except (json.JSONDecodeError, OSError):
+        return set()
+
+
+def _write_lastfailed(results):
+    """Write set of (path, name) tuples that failed to cache."""
+    import json
+    import os
+    failed = [(r.test.path, r.test.name) for r in results if not r.passed]
+    dirpath = _cache_dir()
+    os.makedirs(dirpath, exist_ok=True)
+    with open(_lastfailed_path(), "w") as f:
+        json.dump(failed, f)
+
+
+def _validate_markers(tests):
+    """Check that all markers are registered (stub for now)."""
+    known = {"parametrize", "skip", "skipif", "xfail", "usefixtures", "filterwarnings"}
+    unknown = set()
+    for t in tests:
+        mod = _get_test_module(t.path)
+        if mod is None:
+            continue
+        raw = t.name.split("[")[0]
+        clean = raw.split("::")[-1] if "::" in raw else raw
+        func = getattr(mod, clean, None)
+        if func is None:
+            continue
+        marks = getattr(func, "_oxytest_marks", [])
+        for name, _, _ in marks:
+            if name not in known:
+                unknown.add(name)
+    if unknown:
+        print(f"oxytest: error – unknown marker(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _list_fixtures():
+    from oxytest._fixtures import get_fixture_manager
+    fm = get_fixture_manager()
+    print("Available fixtures:")
+    for name in sorted(fm._fixtures.keys()):
+        fdef = fm._fixtures[name]
+        print(f"  {name} (scope={fdef.scope}, autouse={fdef.autouse})")
+
+
+def _list_markers():
+    known = {"parametrize", "skip", "skipif", "xfail", "usefixtures", "filterwarnings"}
+    print("Registered markers:")
+    for m in sorted(known):
+        print(f"  {m}  -- oxytest internal marker")
+    print()
+    print("Use ``@pytest.mark.name`` to register custom markers.")
+
+
+def _print_collected(tests, verbose=False):
+    """Print collected tests without running them."""
+    print(f"Collected {len(tests)} test(s)")
+    if verbose:
+        for t in tests:
+            print(f"  {t.path}::{t.name}")
+
+
+def _print_durations(results, n):
+    """Print the N slowest tests."""
+    sorted_results = sorted(results, key=lambda r: r.duration_ms, reverse=True)
+    print()
+    print("=" * 60)
+    print(f"Slowest {min(n, len(sorted_results))} test(s):")
+    print("=" * 60)
+    for r in sorted_results[:n]:
+        print(f"  {r.duration_ms:>6}ms  {r.test.path}::{r.test.name}")
+
+
+def _print_summary(reporter, chars):
+    """Print extra summary based on -r flags."""
+    summary_lines = []
+    for ch in chars:
+        if ch == "A":
+            for r in reporter.results:
+                if r.passed:
+                    summary_lines.append(f"  PASS {r.test.path}::{r.test.name}")
+            for line in _summary_for_failures(reporter):
+                summary_lines.append(line)
+            for r in reporter.skipped:
+                summary_lines.append(f"  SKIP {r.test.path}::{r.test.name}")
+        elif ch == "f":
+            for line in _summary_for_failures(reporter):
+                summary_lines.append(line)
+        elif ch == "s":
+            for r in reporter.skipped:
+                summary_lines.append(f"  SKIP {r.test.path}::{r.test.name}")
+        elif ch == "x":
+            pass  # xfail — not tracked yet
+        elif ch == "w":
+            pass  # warnings — not tracked yet
+    if summary_lines:
+        print()
+        print("=" * 60)
+        print("Summary:")
+        print("=" * 60)
+        for line in summary_lines:
+            print(line)
+
+
+def _summary_for_failures(reporter):
+    lines = []
+    for r in reporter.failures:
+        lines.append(f"  FAIL {r.test.path}::{r.test.name}")
+    return lines
+
+
+def _get_test_module(filepath):
+    """Import a module by filepath (used by _validate_markers)."""
+    import importlib.util
+    module_name = filepath.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+    spec = importlib.util.spec_from_file_location(module_name, filepath)
+    if spec and spec.loader:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    return None
+
+
 def _write_junitxml(reporter: TerminalReporter, path: str):
     root = ET.Element("testsuites")
     suite = ET.SubElement(root, "testsuite")
@@ -579,6 +894,10 @@ def _write_junitxml(reporter: TerminalReporter, path: str):
     suite.set("failures", str(reporter.stats.get("failed", 0)))
     suite.set("errors", str(reporter.stats.get("errors", 0)))
     suite.set("time", f"{reporter.end_time - reporter.start_time:.3f}")
+    suite.set("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(reporter.start_time)))
+
+    system_out_lines: list[str] = []
+    system_err_lines: list[str] = []
 
     for result in reporter.failures:
         tc = ET.SubElement(suite, "testcase")
@@ -589,12 +908,27 @@ def _write_junitxml(reporter: TerminalReporter, path: str):
         fail.set("message", result.error or "Test failed")
         if result.traceback:
             fail.text = result.traceback
+        if result.output:
+            system_out_lines.append(f"--- {result.test.path}::{result.test.name} ---")
+            system_out_lines.append(result.output)
+        if result.error_output:
+            system_err_lines.append(f"--- {result.test.path}::{result.test.name} ---")
+            system_err_lines.append(result.error_output)
 
     for result in reporter.skipped:
         tc = ET.SubElement(suite, "testcase")
         tc.set("classname", result.test.path)
         tc.set("name", result.test.name)
+        tc.set("time", f"{result.duration_ms / 1000:.3f}")
         ET.SubElement(tc, "skipped")
+
+    if system_out_lines:
+        so = ET.SubElement(suite, "system-out")
+        so.text = "\n".join(system_out_lines)
+
+    if system_err_lines:
+        se = ET.SubElement(suite, "system-err")
+        se.text = "\n".join(system_err_lines)
 
     tree = ET.ElementTree(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
@@ -629,6 +963,19 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  -s                  Don't capture stdout/stderr")
         print("  --maxfail=N         Stop after N failures")
         print("  -p PLUGIN           Load plugin (can be used multiple times)")
+        print("  --ignore=PATH       Ignore test path (can be used multiple times)")
+        print("  --collect-only, --co  Only collect tests, don't run")
+        print("  --durations=N       Show N slowest tests")
+        print("  -r[chars]           Show extra test summary (-rA, -rf, -rs, ...)")
+        print("  --showlocals        Show local variables in tracebacks")
+        print("  --strict-markers    Unknown markers cause errors")
+        print("  --rootdir=PATH      Set root directory for discovery")
+        print("  --fixtures          List available fixtures")
+        print("  --markers           List registered markers")
+        print("  --setup-show        Print fixture setup/teardown")
+        print("  --cache-clear       Clear cache before run")
+        print("  --lf, --last-failed  Run only tests that failed last time")
+        print("  --ff, --failed-first Run failed tests first, then rest")
         print("  --version           Show version")
         print("  -h, --help          Show this help message")
         print()
@@ -662,6 +1009,19 @@ def main(args: Optional[List[str]] = None) -> int:
         nocapture=opts["nocapture"],
         maxfail=opts["maxfail"],
         config=config,
+        ignore=opts.get("ignore", []),
+        collect_only=opts.get("collect_only", False),
+        durations=opts.get("durations", None),
+        report_summary=opts.get("report_summary", None),
+        showlocals=opts.get("showlocals", False),
+        strict_markers=opts.get("strict_markers", False),
+        rootdir=opts.get("rootdir", None),
+        fixtures_list=opts.get("fixtures_list", False),
+        markers_list=opts.get("markers_list", False),
+        setup_show=opts.get("setup_show", False),
+        cache_clear=opts.get("cache_clear", False),
+        lf=opts.get("lf", False),
+        ff=opts.get("ff", False),
     )
 
 
@@ -789,6 +1149,41 @@ def _execute_test(path: str, name: str, args_json: str):
             func(*param_values)
         else:
             func()
+    except AssertionError:
+        import traceback as _tb
+        tb_list = _tb.extract_tb(sys.exc_info()[2])
+
+        showlocals = os.environ.get("OXYTEST_SHOWLOCALS") == "1"
+        if showlocals:
+            tb_obj = sys.exc_info()[2]
+            while tb_obj:
+                frame = tb_obj.tb_frame
+                if frame.f_code.co_filename == func.__code__.co_filename:
+                    locals_str = "\n".join(
+                        f"  {k} = {v!r}"
+                        for k, v in sorted(frame.f_locals.items())
+                        if not k.startswith("_")
+                    )
+                    if locals_str:
+                        locals_str = "\n" + locals_str
+                    break
+                tb_obj = tb_obj.tb_next
+
+        if tb_list:
+            last = tb_list[-1]
+            try:
+                with open(last.filename) as f:
+                    lines = f.readlines()
+                if last.lineno and last.lineno <= len(lines):
+                    source_line = lines[last.lineno - 1].strip()
+                    _enhanced_msg = _format_assert_detail(source_line, last.filename, last.lineno)
+                    if showlocals and locals_str:
+                        _enhanced_msg += "\n\nLocals:\n" + locals_str
+                    if _enhanced_msg:
+                        raise AssertionError(_enhanced_msg) from None
+            except (OSError, IndexError):
+                pass
+        raise
     finally:
         fm.cleanup()
 

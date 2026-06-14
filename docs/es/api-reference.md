@@ -41,6 +41,24 @@ with pytest.raises(ValueError, match="inválido"):
     int("literal inválido")
 ```
 
+### Reescritura de Asserts
+Oxytest reescribe automáticamente los `assert` para producir mensajes detallados:
+
+```python
+# En vez de: AssertionError
+# Obtienes: AssertionError: assert 1 == 2
+#                               1 == 2
+assert x == y
+
+# Con --showlocals:
+#   AssertionError: assert 1 == 2
+#                   1 == 2
+#
+#   Locals:
+#     x = 1
+#     y = 2
+```
+
 ## Fixtures
 
 ### `pytest.fixture(scope="function", params=None, autouse=False, name=None)`
@@ -52,6 +70,21 @@ def base_datos():
     db = crear_base_datos()
     yield db
     db.cerrar()
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_once():
+    print("ejecuta una vez por módulo")
+```
+
+### Yield Fixtures
+Los yield fixtures ejecutan teardown automáticamente:
+
+```python
+@pytest.fixture
+def recurso():
+    print("setup")
+    yield valor
+    print("teardown")  # se ejecuta después del test
 ```
 
 ### Fixtures Integrados
@@ -115,6 +148,20 @@ def test_inestable():
     assert False
 ```
 
+### `pytest.mark.usefixtures(*names)`
+Aplica fixtures a un test o clase sin inyectarlos como parámetros.
+
+```python
+@pytest.mark.usefixtures("base_datos")
+class TestSuite:
+    def test_consulta(self):
+        ...  # fixture base_datos está activo
+
+@pytest.mark.usefixtures("setup")
+def test_con_setup():
+    ...
+```
+
 ## Utilidades
 
 ### `pytest.skip(reason)`
@@ -132,6 +179,82 @@ Inicia un depurador (usa `pdb`).
 ### `pytest.exit(exit_code=0)`
 Sale de la sesión de tests.
 
+### `pytest.param(values, id=None, marks=None)`
+Crea un argumento parametrizado con id o marcas personalizadas.
+
+```python
+@pytest.mark.parametrize("x", [
+    pytest.param(1, id="uno"),
+    pytest.param(2, marks=pytest.mark.skip),
+])
+def test_valores(x):
+    ...
+```
+
+## Sistema de Plugins
+
+### `hookimpl(tryfirst=False, trylast=False, hookwrapper=False)`
+Decorador para implementaciones de hooks de plugins.
+
+```python
+from oxytest import hookimpl
+
+@hookimpl
+def pytest_addoption(parser):
+    parser.addoption("--mi-flag", action="store_true")
+
+@hookimpl(tryfirst=True)
+def pytest_configure(config):
+    value = config.getoption("--mi-flag")
+```
+
+### `hookspec(tryfirst=False, trylast=False)`
+Decorador para definir especificaciones de hooks.
+
+### `Config`
+Contiene opciones CLI parseadas y estado del plugin.
+
+```python
+from oxytest import Config
+config = Config(opts)
+value = config.getoption("--mi-flag")
+```
+
+### `Parser`
+Interfaz tipo argparse para hooks `pytest_addoption`.
+
+```python
+parser.addoption("--mi-flag", action="store_true", help="...")
+```
+
+### `PluginManager`
+Gestiona registro de plugins y llamadas a hooks.
+
+```python
+from oxytest import get_plugin_manager
+pm = get_plugin_manager()
+pm.load_entry_point_plugins()
+```
+
+### `get_plugin_manager()`
+Obtiene la instancia singleton del gestor de plugins.
+
+## Herramienta de Migración
+
+```bash
+# Previsualizar migración de pytest → oxytest
+oxytest migrate src/ --dry-run
+
+# Realizar migración
+oxytest migrate src/
+
+# Reversa: oxytest → pytest
+oxytest migrate src/ --reverse
+
+# Solo verificar (código 1 si encuentra imports de pytest)
+oxytest migrate src/ --check
+```
+
 ## Flags de CLI
 
 | Flag | Descripción |
@@ -141,10 +264,24 @@ Sale de la sesión de tests.
 | `-x`, `--exitfirst` | Detener en el primer fallo |
 | `-k EXPR` | Filtrar tests por expresión clave |
 | `--tb=estilo` | Estilo de traceback (short, long, native, no) |
-| `-n WORKERS` | Número de workers paralelos |
+| `-n WORKERS` | Número de workers paralelos (`auto` = CPUs) |
 | `--junitxml=RUTA` | Generar reporte JUnit XML |
 | `-s` | No capturar stdout/stderr |
 | `--maxfail=N` | Detener después de N fallos |
+| `-p PLUGIN` | Cargar plugin (repetible) |
+| `--ignore=RUTA` | Ignorar ruta de test (repetible) |
+| `--collect-only`, `--co` | Solo recolectar tests |
+| `--durations=N` | Mostrar N tests más lentos |
+| `-r[caracteres]` | Resumen extra (-rA, -rf, -rs) |
+| `--showlocals` | Mostrar variables locales en tracebacks |
+| `--strict-markers` | Marcadores desconocidos causan error |
+| `--rootdir=RUTA` | Directorio raíz para descubrimiento |
+| `--fixtures` | Listar fixtures disponibles |
+| `--markers` | Listar marcadores registrados |
+| `--setup-show` | Imprimir setup/teardown de fixtures |
+| `--cache-clear` | Limpiar caché antes de ejecutar |
+| `--lf`, `--last-failed` | Solo tests que fallaron antes |
+| `--ff`, `--failed-first` | Fallos primero, luego el resto |
 | `--version` | Mostrar versión |
 | `-h`, `--help` | Mostrar ayuda |
 

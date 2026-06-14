@@ -1,6 +1,6 @@
 [package]
 name = "oxytest-core"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Oxytest Rust core - fast pytest-compatible test runner"
 license = "MIT"

@@ -32,8 +32,12 @@ oxytest/
 │       ├── __main__.py     # Punto de entrada python -m oxytest
 │       ├── _compat.py      # Capa de compatibilidad con API de pytest
 │       ├── _core.pyi       # Type stubs para el módulo Rust
-│       └── _fixtures.py    # Sistema de fixtures (tmp_path, capsys, etc.)
+│       ├── _fixtures.py    # Sistema de fixtures (tmp_path, capsys, etc.)
+│       ├── _plugin.py      # Sistema de plugins (hooks basados en pluggy)
+│       ├── _assert.py      # Reescritura de asserts para diffs de comparación
+│       └── _migrate.py     # Herramienta de migración de imports (pytest ↔ oxytest)
 ├── tests/                  # Suite de tests para oxytest
+│   └── sample_tests/       # Tests de muestra para integración
 ├── docs/                   # Documentación
 │   ├── en/                 # Documentación en inglés
 │   └── es/                 # Documentación en español
@@ -64,14 +68,20 @@ cargo build --release
 ## Testing
 
 ```bash
-# Ejecutar tests de muestra
+# Ejecutar tests de muestra (30 tests, todos deben pasar)
 oxytest tests/sample_tests/ -v
 
-# Ejecutar la suite de tests de oxytest
-python -m pytest tests/
+# Ejecutar la suite de tests de oxytest (39 tests, todos deben pasar)
+python -m pytest tests/ -v --ignore=tests/sample_tests
+
+# Ejecutar ambos juntos
+python -m pytest tests/ -v
 
 # Ejecutar tests de Rust
 cargo test
+
+# Probar salida de fallos (9 tests, todos deben fallar)
+oxytest tests/sample_tests/test_failures.py --tb=short
 ```
 
 ## Estilo de Código

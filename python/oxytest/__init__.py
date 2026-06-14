@@ -36,7 +36,7 @@ from oxytest._plugin import (
     hookspec,
 )
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "main",

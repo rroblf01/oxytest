@@ -20,4 +20,8 @@ site/
 *.bench
 benchmarks/_generated/
 
+# Shared libraries
 *.so
+
+# Tests
+.pytest_cache/
