@@ -39,5 +39,5 @@ Oxytest está en desarrollo activo. El MVP es funcional con:
 - ✅ API compatible con pytest (`main`, `approx`, `raises`, `fixture`, `mark`, etc.)
 - ✅ CLI con flags comunes (`-v`, `-x`, `-k`, `--tb`, `-n`, etc.)
 - ✅ Salida JUnit XML
-- ⚠️ Fixtures (soporte básico)
+- ✅ Fixtures (`tmp_path`, `capsys`, `monkeypatch` + `conftest.py`)
 - ❌ Plugins (próximamente)

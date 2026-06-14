@@ -23,11 +23,12 @@ fn collect_class_methods(
             let method_name = item.getattr("name")?.extract::<String>()?;
             if method_name.starts_with("test_") {
                 let lineno = item.getattr("lineno")?.extract::<u32>()?;
-                tests.push(TestItem {
-                    path: filepath.to_string(),
-                    name: format!("{}::{}", class_name, method_name),
-                    line_no: lineno,
-                });
+                    tests.push(TestItem {
+                        path: filepath.to_string(),
+                        name: format!("{}::{}", class_name, method_name),
+                        line_no: lineno,
+                        args_json: String::new(),
+                    });
             }
         }
     }
@@ -64,6 +65,7 @@ fn discover_tests_in_file(py: Python<'_>, filepath: &str) -> PyResult<Vec<TestIt
                         path: filepath.to_string(),
                         name,
                         line_no: lineno,
+                        args_json: String::new(),
                     });
                 }
             }
@@ -87,10 +89,7 @@ fn discover_tests_in_file(py: Python<'_>, filepath: &str) -> PyResult<Vec<TestIt
 pub fn discover_tests(_py: Python<'_>, root_dir: &str, pattern: Option<&str>) -> PyResult<Vec<TestItem>> {
     let root = Path::new(root_dir);
     if !root.exists() {
-        return Err(PyErr::new::<pyo3::exceptions::PyFileNotFoundError, _>(format!(
-            "Directory not found: {}",
-            root_dir
-        )));
+        return Ok(Vec::new());
     }
 
     let all_tests = Mutex::new(Vec::new());
@@ -128,18 +127,15 @@ pub fn discover_tests(_py: Python<'_>, root_dir: &str, pattern: Option<&str>) ->
         if !is_test_file(&filename) {
             continue;
         }
-        if let Some(ref pat) = pattern {
-            if !filepath.to_lowercase().contains(pat) {
-                continue;
-            }
-        }
-
         if let Ok(tests) = discover_tests_in_file(_py, filepath) {
             all_tests.lock().unwrap().extend(tests);
         }
     }
 
     let mut result = all_tests.into_inner().unwrap();
+    if let Some(ref pat) = pattern {
+        result.retain(|t| t.name.to_lowercase().contains(pat) || t.path.to_lowercase().contains(pat));
+    }
     result.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line_no.cmp(&b.line_no)));
     Ok(result)
 }

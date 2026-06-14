@@ -15,7 +15,6 @@ Opciones:
   --junitxml=RUTA     Generar reporte JUnit XML
   -s                  No capturar stdout/stderr
   --maxfail=N         Detener después de N fallos
-  --coverage          Habilitar cobertura (experimental)
   --version           Mostrar versión
   -h, --help          Mostrar ayuda
 ```

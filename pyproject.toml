@@ -4,9 +4,23 @@ version = "0.1.0"
 description = "A 100% pytest-compatible test runner written in Python + Rust, optimized for speed"
 readme = "README.md"
 authors = [
-    { name = "Ricardo Robles", email = "ricardo.r.f@hotmail.com" }
+    { name = "Ricardo Robles Fernández", email = "ricardo.r.f@hotmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = []
 
 [build-system]
@@ -23,4 +37,4 @@ oxytest = "oxytest:main"
 
 [project.urls]
 Documentation = "https://oxytest.dev"
-Repository = "https://github.com/ricardoroble/oxytest"
+Repository = "https://github.com/rroblf01/oxytest"

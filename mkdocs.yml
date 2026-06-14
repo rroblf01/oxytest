@@ -14,6 +14,7 @@ nav:
   - Getting Started: getting-started.md
   - Usage: usage.md
   - API Reference: api-reference.md
+  - Migration from pytest: migration.md
   - Benchmarks: benchmarks.md
   - Contributing: contributing.md
 

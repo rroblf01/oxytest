@@ -15,7 +15,6 @@ Options:
   --junitxml=PATH     Generate JUnit XML report
   -s                  Don't capture stdout/stderr
   --maxfail=N         Stop after N failures
-  --coverage          Enable coverage (experimental)
   --version           Show version
   -h, --help          Show this help message
 ```

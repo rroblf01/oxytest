@@ -3,6 +3,8 @@ name = "oxytest-core"
 version = "0.1.0"
 edition = "2021"
 description = "Oxytest Rust core - fast pytest-compatible test runner"
+license = "MIT"
+authors = ["Ricardo Robles <ricardo.r.f@hotmail.com>"]
 
 [lib]
 name = "oxytest_core"

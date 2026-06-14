@@ -55,6 +55,14 @@ class FixtureManager:
                 name=meta["name"],
             )
 
+    def register_from_module(self, module):
+        for attr_name in dir(module):
+            if attr_name.startswith("_"):
+                continue
+            obj = getattr(module, attr_name)
+            if hasattr(obj, "_oxytest_fixture"):
+                self.register(obj)
+
     def resolve(self, name: str, scope: str = "function") -> Any:
         if name in self._cache:
             cached_scope = self._active_scopes.get(name)
@@ -66,6 +74,9 @@ class FixtureManager:
 
         fdef = self._fixtures[name]
         value = fdef.func()
+
+        if hasattr(value, "start"):
+            value.start()
 
         if fdef.scope in ("session", "module", "class"):
             self._cache[name] = value
@@ -80,6 +91,10 @@ class FixtureManager:
             except Exception:
                 pass
         self._tmpdirs.clear()
+
+    def finish_fixture(self, value):
+        if hasattr(value, "stop"):
+            value.stop()
 
     def _fixture_tmp_path(self) -> pathlib.Path:
         tmpdir = tempfile.mkdtemp(prefix="oxytest_")

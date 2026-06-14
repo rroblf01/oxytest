@@ -56,6 +56,15 @@ class ApproxDecimal:
     def __repr__(self):
         return f"approx({self.expected!r}, rel={self.rel}, abs={self.abs})"
 
+    def __eq__(self, actual):
+        return self._eq(actual)
+
+    def __ne__(self, actual):
+        return not self._eq(actual)
+
+    def __hash__(self):
+        return hash(self.expected)
+
     def _eq(self, actual):
         if actual is None or self.expected is None:
             return actual == self.expected
@@ -396,10 +405,9 @@ def _parse_args(args: List[str]) -> dict:
         "tb_style": "short",
         "num_workers": None,
         "junitxml": None,
-        "nocapture": False,
-        "maxfail": None,
-        "coverage": False,
-        "version": False,
+    "nocapture": False,
+    "maxfail": None,
+    "version": False,
     }
 
     i = 0
@@ -428,8 +436,6 @@ def _parse_args(args: List[str]) -> dict:
         elif arg == "--maxfail" and i + 1 < len(args):
             i += 1
             parsed["maxfail"] = int(args[i])
-        elif arg == "--coverage":
-            parsed["coverage"] = True
         elif arg in ("--version",):
             parsed["version"] = True
         elif arg in ("-h", "--help"):
@@ -458,12 +464,14 @@ def _run_tests(
     nocapture: bool = False,
     maxfail: Optional[int] = None,
 ) -> int:
-    py = None  # GIL handled by Rust
+    from oxytest._fixtures import get_fixture_manager
+    fm = get_fixture_manager()
 
     all_tests = []
     for path in paths:
         tests = discover_tests(path, keyword)
         all_tests.extend(tests)
+        _load_conftest(path)
 
     if not all_tests:
         print("No tests found")
@@ -476,10 +484,15 @@ def _run_tests(
         print(f"\nDiscovered {len(all_tests)} test(s)")
         print()
 
+    all_tests = _expand_parametrize(all_tests)
+    if verbose:
+        print(f"After parametrize expansion: {len(all_tests)} test(s)")
+        print()
+
     if num_workers is None or num_workers == 1:
-        results = run_tests_sequential(all_tests)
+        results = run_tests_sequential(all_tests, nocapture=nocapture)
     else:
-        results = run_tests(all_tests, num_workers)
+        results = run_tests(all_tests, num_workers, nocapture=nocapture)
 
     had_failure = False
     for result in results:
@@ -550,7 +563,6 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  --junitxml=PATH     Generate JUnit XML report")
         print("  -s                  Don't capture stdout/stderr")
         print("  --maxfail=N         Stop after N failures")
-        print("  --coverage          Enable coverage")
         print("  --version           Show version")
         print("  -h, --help          Show this help message")
         return 0
@@ -567,6 +579,177 @@ def main(args: Optional[List[str]] = None) -> int:
         nocapture=opts["nocapture"],
         maxfail=opts["maxfail"],
     )
+
+
+def _load_conftest(root_dir: str):
+    """Load conftest.py files from the given directory and its parents."""
+    from oxytest._fixtures import get_fixture_manager
+    fm = get_fixture_manager()
+
+    dirpath = os.path.abspath(root_dir) if os.path.isdir(root_dir) else os.path.dirname(os.path.abspath(root_dir))
+    seen = set()
+    while dirpath != "/" and dirpath not in seen:
+        seen.add(dirpath)
+        conftest_path = os.path.join(dirpath, "conftest.py")
+        if os.path.isfile(conftest_path):
+            module_name = conftest_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(module_name, conftest_path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                fm.register_from_module(mod)
+        parent = os.path.dirname(dirpath)
+        if parent == dirpath:
+            break
+        dirpath = parent
+
+
+def _execute_test(path: str, name: str, args_json: str):
+    """Import module, resolve fixtures, and run a single test.
+    Raises on failure (caught by Rust runner).
+    """
+    import importlib.util
+    import inspect
+    import sys as _sys
+
+    from oxytest._fixtures import get_fixture_manager
+    fm = get_fixture_manager()
+
+    # 1. Import module
+    filepath = os.path.abspath(path)
+    dirpath = os.path.dirname(filepath)
+    if dirpath not in _sys.path:
+        _sys.path.insert(0, dirpath)
+
+    module_name = filepath.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+    module_name = module_name.lstrip(".")
+
+    spec = importlib.util.spec_from_file_location(module_name, filepath)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load spec for {path}")
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+
+    # 2. Resolve function
+    raw_name = name
+    clean_name = name.split("[")[0] if "[" in name else name
+
+    if "::" in clean_name:
+        parts = clean_name.split("::")
+        cls = getattr(mod, parts[0])
+        instance = cls()
+        func = getattr(instance, parts[1])
+    else:
+        func = getattr(mod, clean_name)
+
+    # 3. Parse parametrize args
+    if args_json:
+        import json
+        param_values = json.loads(args_json)
+    else:
+        param_values = []
+
+    # 4. Resolve fixtures for remaining parameters
+    sig = inspect.signature(func)
+    all_params = [p for p in sig.parameters.keys() if p != "self"]
+    fixture_params = all_params[len(param_values):]
+
+    for pname in fixture_params:
+        try:
+            val = fm.resolve(pname)
+            param_values.append(val)
+        except LookupError:
+            raise TypeError(
+                f"{raw_name}() missing required argument: '{pname}' "
+                f"(not provided by parametrize args or registered fixtures)"
+            )
+
+    # 5. Call test
+    try:
+        if param_values:
+            func(*param_values)
+        else:
+            func()
+    finally:
+        fm.cleanup()
+
+
+def _expand_parametrize(tests: list) -> list:
+    import importlib.util
+
+    expanded = []
+    file_cache = {}
+
+    for test in tests:
+
+        if test.args_json:
+            expanded.append(test)
+            continue
+
+        filepath = test.path
+        if filepath not in file_cache:
+            try:
+                module_name = filepath.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+                spec = importlib.util.spec_from_file_location(module_name, filepath)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    file_cache[filepath] = mod
+                    spec.loader.exec_module(mod)
+            except Exception:
+                file_cache[filepath] = None
+
+        mod = file_cache.get(filepath)
+        if mod is None:
+            expanded.append(test)
+            continue
+
+        if "::" in test.name:
+            expanded.append(test)
+            continue
+
+        func = getattr(mod, test.name, None)
+        if func is None:
+            expanded.append(test)
+            continue
+
+        marks = getattr(func, "_oxytest_marks", [])
+        has_parametrize = False
+        for mark_name, mark_args, mark_kwargs in marks:
+            if mark_name == "parametrize" and len(mark_args) >= 2:
+                has_parametrize = True
+                argnames_str = mark_args[0]
+                argvalues_list = mark_args[1]
+
+                if isinstance(argnames_str, str):
+                    argnames = [a.strip() for a in argnames_str.split(",")]
+                else:
+                    argnames = list(argnames_str)
+
+                for i, val in enumerate(argvalues_list):
+                    if isinstance(val, dict) and "values" in val:
+                        values = val["values"]
+                    elif isinstance(val, (list, tuple)):
+                        values = list(val)
+                    else:
+                        values = [val]
+
+                    import json
+                    test_clone = TestItem()
+                    test_clone.path = test.path
+                    if len(values) == 1 and len(argnames) == 1:
+                        test_clone.name = f"{test.name}[{values[0]}]"
+                    else:
+                        test_clone.name = f"{test.name}[{i}]"
+                    test_clone.line_no = test.line_no
+                    test_clone.args_json = json.dumps(values)
+                    expanded.append(test_clone)
+
+        if not has_parametrize:
+            expanded.append(test)
+
+    return expanded
 
 
 _oxytest_api = [

@@ -3,18 +3,34 @@ use pyo3::prelude::*;
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct TestItem {
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     pub path: String,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     pub name: String,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     pub line_no: u32,
+    #[pyo3(get, set)]
+    pub args_json: String,
 }
 
 #[pymethods]
 impl TestItem {
+    #[new]
+    fn py_new() -> Self {
+        TestItem {
+            path: String::new(),
+            name: String::new(),
+            line_no: 0,
+            args_json: String::new(),
+        }
+    }
+
     fn __repr__(&self) -> String {
-        format!("TestItem({}:{}: {})", self.path, self.line_no, self.name)
+        if self.args_json.is_empty() {
+            format!("TestItem({}:{}: {})", self.path, self.line_no, self.name)
+        } else {
+            format!("TestItem({}:{}: {} [args={}])", self.path, self.line_no, self.name, self.args_json)
+        }
     }
 }
 
@@ -78,5 +94,11 @@ impl TestResult {
             error: Some(error),
             traceback,
         }
+    }
+}
+
+impl TestItem {
+    pub fn new_no_args(path: String, name: String, line_no: u32) -> Self {
+        TestItem { path, name, line_no, args_json: String::new() }
     }
 }

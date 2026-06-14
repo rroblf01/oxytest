@@ -78,11 +78,9 @@ def test_raises_no_exception():
 
 
 def test_raises_wrong_exception():
-    try:
+    with pytest.raises(ValueError):
         with pytest.raises(TypeError):
-            int("not_a_number")
-    except TypeError:
-        pass  # The ValueError propagates
+            int("not_a_number")  # ValueError propagates through TypeError expectation
 
 
 def test_raises_match():
@@ -140,7 +138,7 @@ def test_version_string():
 
 
 def test_test_item_repr():
-    tests = oxytest.discover_tests(os.path.join(os.path.dirname(__file__), "sample_tests"))
+    tests = pytest.discover_tests(os.path.join(os.path.dirname(__file__), "sample_tests"))
     if tests:
         assert "test_" in repr(tests[0]) or "::" in repr(tests[0])
 
