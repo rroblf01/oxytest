@@ -4,7 +4,8 @@ import io
 import tempfile
 import pathlib
 import shutil
-from typing import Any, Callable, Dict, Optional
+import inspect
+from typing import Any, Callable, Dict, Generator, Optional
 
 
 class FixtureDef:
@@ -30,6 +31,8 @@ class FixtureManager:
         self._fixtures: Dict[str, FixtureDef] = {}
         self._cache: Dict[str, Any] = {}
         self._active_scopes: Dict[str, str] = {}
+        self._generators: Dict[str, Generator] = {}
+        self._resolved_fixtures: list[Any] = []
         self._tmpdirs: list = []
         self._setup_builtins()
 
@@ -74,6 +77,14 @@ class FixtureManager:
         fdef = self._fixtures[name]
         value = fdef.func()
 
+        if inspect.isgenerator(value):
+            try:
+                yielded = next(value)
+            except StopIteration:
+                yielded = None
+            self._generators[name] = value
+            value = yielded
+
         if hasattr(value, "start"):
             value.start()
 
@@ -81,9 +92,32 @@ class FixtureManager:
             self._cache[name] = value
             self._active_scopes[name] = fdef.scope
 
+        self._resolved_fixtures.append(value)
         return value
 
     def cleanup(self, scope: str = "function"):
+        for name, gen in self._generators.items():
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+            gen.close()
+        self._generators.clear()
+        for value in self._resolved_fixtures:
+            if hasattr(value, "stop"):
+                try:
+                    value.stop()
+                except Exception:
+                    pass
+        self._resolved_fixtures.clear()
+        for name, value in self._cache.items():
+            if hasattr(value, "stop"):
+                try:
+                    value.stop()
+                except Exception:
+                    pass
+        self._cache.clear()
+        self._active_scopes.clear()
         for tmpdir in self._tmpdirs:
             try:
                 shutil.rmtree(tmpdir, ignore_errors=True)
@@ -92,6 +126,12 @@ class FixtureManager:
         self._tmpdirs.clear()
 
     def finish_fixture(self, value):
+        if inspect.isgenerator(value):
+            try:
+                next(value)
+            except StopIteration:
+                pass
+            value.close()
         if hasattr(value, "stop"):
             value.stop()
 

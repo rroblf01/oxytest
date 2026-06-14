@@ -387,6 +387,52 @@ class TerminalReporter:
         return 0
 
 
+class Parser:
+    """Minimal argparse-like interface for ``pytest_addoption`` hooks."""
+
+    def __init__(self):
+        self._options: dict[str, dict] = {}
+
+    def addoption(self, *args: str, **kwargs):
+        key = kwargs.get("dest") or args[0].lstrip("-").replace("-", "_")
+        self._options[key] = {"args": args, "kwargs": kwargs, "value": None}
+
+    def parse(self, argv: list[str]) -> dict:
+        """Parse known plugin options from argv, return {key: value}."""
+        result = {}
+        for key, opt in self._options.items():
+            for arg in opt["args"]:
+                if arg in argv:
+                    idx = argv.index(arg)
+                    if opt["kwargs"].get("action") in ("store_true", "store_false"):
+                        result[key] = argv[idx] not in ("--no-" + arg.lstrip("-"),)
+                    elif idx + 1 < len(argv):
+                        result[key] = argv[idx + 1]
+                    break
+            if key not in result:
+                result[key] = opt["kwargs"].get("default", None)
+        return result
+
+
+class Config:
+    """Holds parsed CLI options and plugin state."""
+
+    def __init__(self, opts: dict, parser: Parser | None = None):
+        self._opts = opts
+        self.parser = parser or Parser()
+        self.plugin_options: dict = {}
+
+    def getoption(self, name: str, default=None):
+        return self._opts.get(name, default)
+
+    @property
+    def option(self):
+        return self._opts
+
+    def addinivalue_line(self, name: str, line: str):
+        pass  # stub for plugin compatibility
+
+
 def _parse_args(args: List[str]) -> dict:
     parsed = {
         "paths": [],
@@ -400,6 +446,7 @@ def _parse_args(args: List[str]) -> dict:
     "nocapture": False,
     "maxfail": None,
     "version": False,
+    "plugins": [],
     }
 
     i = 0
@@ -414,12 +461,18 @@ def _parse_args(args: List[str]) -> dict:
         elif arg == "-k" and i + 1 < len(args):
             i += 1
             parsed["keyword"] = args[i]
+        elif arg.startswith("--tb="):
+            parsed["tb_style"] = arg[5:]
         elif arg == "--tb" and i + 1 < len(args):
             i += 1
             parsed["tb_style"] = args[i]
         elif arg == "-n" and i + 1 < len(args):
             i += 1
-            parsed["num_workers"] = int(args[i])
+            if args[i] == "auto":
+                import os
+                parsed["num_workers"] = os.cpu_count() or 1
+            else:
+                parsed["num_workers"] = int(args[i])
         elif arg == "--junitxml" and i + 1 < len(args):
             i += 1
             parsed["junitxml"] = args[i]
@@ -430,6 +483,9 @@ def _parse_args(args: List[str]) -> dict:
             parsed["maxfail"] = int(args[i])
         elif arg in ("--version",):
             parsed["version"] = True
+        elif arg == "-p" and i + 1 < len(args):
+            i += 1
+            parsed["plugins"].append(args[i])
         elif arg in ("-h", "--help"):
             parsed["help"] = True
         elif arg.startswith("-"):
@@ -455,16 +511,28 @@ def _run_tests(
     junitxml: Optional[str] = None,
     nocapture: bool = False,
     maxfail: Optional[int] = None,
+    config: Optional['Config'] = None,
 ) -> int:
+    pm = None
+    if config is not None:
+        from oxytest._plugin import get_plugin_manager
+        pm = get_plugin_manager()
+        pm.hook.pytest_sessionstart(session=config)
+
     all_tests = []
     for path in paths:
         tests = discover_tests(path, keyword)
         all_tests.extend(tests)
-        _load_conftest(path)
+        _load_conftest(path, config=config)
 
     if not all_tests:
         print("No tests found")
         return 0
+
+    if pm:
+        pm.hook.pytest_collection_modifyitems(
+            session=config, config=config, items=all_tests
+        )
 
     reporter = TerminalReporter(verbose=verbose, quiet=quiet, tb_style=tb_style)
     reporter.start()
@@ -495,7 +563,12 @@ def _run_tests(
     if junitxml:
         _write_junitxml(reporter, junitxml)
 
-    return reporter.get_exit_code()
+    exitcode = reporter.get_exit_code()
+
+    if pm:
+        pm.hook.pytest_sessionfinish(session=config, exitstatus=exitcode)
+
+    return exitcode
 
 
 def _write_junitxml(reporter: TerminalReporter, path: str):
@@ -531,6 +604,10 @@ def main(args: Optional[List[str]] = None) -> int:
     if args is None:
         args = sys.argv[1:]
 
+    if args and args[0] == "migrate":
+        from oxytest._migrate import migrate_main
+        return migrate_main(args[1:])
+
     opts = _parse_args(args)
 
     if opts.get("version"):
@@ -551,9 +628,27 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  --junitxml=PATH     Generate JUnit XML report")
         print("  -s                  Don't capture stdout/stderr")
         print("  --maxfail=N         Stop after N failures")
+        print("  -p PLUGIN           Load plugin (can be used multiple times)")
         print("  --version           Show version")
         print("  -h, --help          Show this help message")
+        print()
+        print("Subcommands:")
+        print("  migrate             Automatically migrate imports between pytest and oxytest")
+        print("                      (e.g., `oxytest migrate --dry-run`)")
         return 0
+
+    from oxytest._plugin import get_plugin_manager
+
+    pm = get_plugin_manager()
+    pm.load_entry_point_plugins()
+
+    config = Config(opts)
+    for plugin_name in opts.get("plugins", []):
+        pm.load_plugin_by_name(plugin_name)
+
+    pm.hook.pytest_addoption(parser=config.parser)
+    config.plugin_options = config.parser.parse(sys.argv[1:])
+    pm.hook.pytest_configure(config=config)
 
     return _run_tests(
         paths=opts["paths"],
@@ -566,13 +661,16 @@ def main(args: Optional[List[str]] = None) -> int:
         junitxml=opts["junitxml"],
         nocapture=opts["nocapture"],
         maxfail=opts["maxfail"],
+        config=config,
     )
 
 
-def _load_conftest(root_dir: str):
+def _load_conftest(root_dir: str, config: Optional['Config'] = None):
     """Load conftest.py files from the given directory and its parents."""
     from oxytest._fixtures import get_fixture_manager
+    from oxytest._plugin import get_plugin_manager
     fm = get_fixture_manager()
+    pm = get_plugin_manager()
 
     dirpath = os.path.abspath(root_dir) if os.path.isdir(root_dir) else os.path.dirname(os.path.abspath(root_dir))
     seen = set()
@@ -587,6 +685,7 @@ def _load_conftest(root_dir: str):
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 fm.register_from_module(mod)
+                pm.load_conftest_plugins(mod, dirpath)
         parent = os.path.dirname(dirpath)
         if parent == dirpath:
             break
@@ -624,6 +723,7 @@ def _execute_test(path: str, name: str, args_json: str):
     raw_name = name
     clean_name = name.split("[")[0] if "[" in name else name
 
+    cls = None
     if "::" in clean_name:
         parts = clean_name.split("::")
         cls = getattr(mod, parts[0])
@@ -639,7 +739,36 @@ def _execute_test(path: str, name: str, args_json: str):
     else:
         param_values = []
 
-    # 4. Resolve fixtures for remaining parameters
+    # 4. Collect fixture names from signature and marks
+    sig = inspect.signature(func)
+    all_params = [p for p in sig.parameters.keys() if p != "self"]
+    fixture_params = all_params[len(param_values):]
+
+    # 4a. Resolve autouse fixtures
+    for fname, fdef in list(fm._fixtures.items()):
+        if fdef.autouse and fname not in all_params:
+            try:
+                fm.resolve(fname)
+            except Exception:
+                pass
+
+    # 4b. Resolve usefixtures from function marks and class marks
+    extra_fixtures = []
+    for obj in (func, cls):
+        if obj is not None and hasattr(obj, "_oxytest_marks"):
+            for mark_name, mark_args, mark_kwargs in obj._oxytest_marks:
+                if mark_name == "usefixtures":
+                    extra_fixtures.extend(mark_args)
+    for fname in extra_fixtures:
+        if fname not in all_params:
+            try:
+                fm.resolve(fname)
+            except LookupError:
+                raise TypeError(
+                    f"{raw_name}() usefixtures requires fixture: '{fname}'"
+                )
+
+    # 5. Resolve fixtures for remaining parameters
     sig = inspect.signature(func)
     all_params = [p for p in sig.parameters.keys() if p != "self"]
     fixture_params = all_params[len(param_values):]

@@ -1,7 +1,3 @@
-<picture>
-  <img alt="oxytest" src="https://raw.githubusercontent.com/rroblf01/oxytest/main/docs/assets/oxytest-banner.png">
-</picture>
-
 # Oxytest
 
 > A 100% pytest-compatible test runner written in Python + Rust via PyO3 and Maturin.

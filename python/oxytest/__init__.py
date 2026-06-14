@@ -21,11 +21,19 @@ from oxytest._compat import (
     TestReport,
     Mark,
     MarkDecorator,
+    Config,
+    Parser,
 )
 from oxytest._fixtures import (
     MonkeyPatch,
     get_fixture_manager,
     fixture_registry,
+)
+from oxytest._plugin import (
+    PluginManager,
+    get_plugin_manager,
+    hookimpl,
+    hookspec,
 )
 
 __version__ = "0.1.0"
@@ -60,5 +68,11 @@ __all__ = [
     "run_tests_sequential",
     "get_fixture_manager",
     "fixture_registry",
+    "PluginManager",
+    "get_plugin_manager",
+    "hookimpl",
+    "hookspec",
+    "Config",
+    "Parser",
     "__version__",
 ]

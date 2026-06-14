@@ -401,6 +401,9 @@ wheels = [
 name = "oxytest"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "pluggy" },
+]
 
 [package.optional-dependencies]
 docs = [
@@ -422,6 +425,7 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'" },
     { name = "mkdocs-material", marker = "extra == 'docs'" },
     { name = "mkdocs-static-i18n", marker = "extra == 'docs'" },
+    { name = "pluggy", specifier = ">=1.6,<2" },
     { name = "pymdown-extensions", marker = "extra == 'docs'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'lint'" },

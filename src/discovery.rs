@@ -98,6 +98,9 @@ pub fn discover_tests(_py: Python<'_>, root_dir: &str, pattern: Option<&str>) ->
         .follow_links(true)
         .into_iter()
         .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
             let name = e.file_name().to_string_lossy();
             !name.starts_with('.')
                 && name != "__pycache__"
