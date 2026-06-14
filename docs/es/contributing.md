@@ -4,7 +4,7 @@
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/ricardoroble/oxytest
+git clone https://github.com/rroblf01/oxytest
 cd oxytest
 
 # Instalar dependencias

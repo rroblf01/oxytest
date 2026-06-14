@@ -1,5 +1,5 @@
 <picture>
-  <img alt="oxytest" src="https://raw.githubusercontent.com/ricardoroble/oxytest/main/docs/assets/oxytest-banner.png">
+  <img alt="oxytest" src="https://raw.githubusercontent.com/rroblf01/oxytest/main/docs/assets/oxytest-banner.png">
 </picture>
 
 # Oxytest
@@ -9,7 +9,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/oxytest)](https://pypi.org/project/oxytest/)
 [![Python](https://img.shields.io/pypi/pyversions/oxytest)](https://pypi.org/project/oxytest/)
-[![License](https://img.shields.io/github/license/ricardoroble/oxytest)](LICENSE)
+[![License](https://img.shields.io/github/license/rroblf01/oxytest)](LICENSE)
 
 ## Why Oxytest?
 
@@ -94,7 +94,7 @@ def test_double(x, expected):
 
 ```bash
 # Clone
-git clone https://github.com/ricardoroble/oxytest
+git clone https://github.com/rroblf01/oxytest
 cd oxytest
 
 # Install dependencies

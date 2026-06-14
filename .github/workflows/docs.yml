@@ -37,7 +37,7 @@ jobs:
 
       - name: Build site
         env:
-          SITE_URL: https://ricardoroble.github.io/oxytest/
+          SITE_URL: https://rroblf01.github.io/oxytest/
         run: uv run mkdocs build --strict
 
       - uses: actions/upload-pages-artifact@v5
