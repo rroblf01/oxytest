@@ -95,6 +95,7 @@ class RaisesContext:
         self.expected_exception = expected_exception
         self.match = match
         self.excinfo = None
+        self._check = None
 
     def __enter__(self):
         return self
@@ -111,6 +112,10 @@ class RaisesContext:
                 raise Failed(
                     f"Exception pattern {self.match!r} does not match {exc_val!r}"
                 )
+        if self._check is not None and not self._check(exc_val):
+            raise Failed(
+                f"Exception check failed: {exc_val!r}"
+            )
         self.excinfo = (exc_type, exc_val, exc_tb)
         return True
 
@@ -147,6 +152,7 @@ def raises(
     expected_exception: Union[Type[BaseException], Tuple[Type[BaseException], ...]],
     *args,
     match: Optional[str] = None,
+    check: Optional[Callable] = None,
 ) -> Union[RaisesContext, ContextManager]:
     if args:
         func = args[0]
@@ -155,7 +161,9 @@ def raises(
         except expected_exception:
             return None
         raise Failed(f"DID NOT RAISE {expected_exception}")
-    return RaisesContext(expected_exception, match=match)
+    ctx = RaisesContext(expected_exception, match=match)
+    ctx._check = check
+    return ctx
 
 
 class PytestDeprecationWarning(FutureWarning):
@@ -289,8 +297,8 @@ class Mark:
     def skip(self, reason: Optional[str] = None):
         return MarkDecorator("skip", (), {"reason": reason})
 
-    def skipif(self, condition, reason: Optional[str] = None):
-        return MarkDecorator("skipif", (condition,), {"reason": reason})
+    def skipif(self, condition, reason: Optional[str] = None, **kwargs):
+        return MarkDecorator("skipif", (condition,), {"reason": reason, **kwargs})
 
     def xfail(self, condition=None, reason: Optional[str] = None, raises=None, strict=None, run=True):
         return MarkDecorator("xfail", (), {"condition": condition, "reason": reason, "raises": raises, "strict": strict, "run": run})
@@ -1162,6 +1170,7 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
             spec = importlib.util.spec_from_file_location(module_name, conftest_path)
             if spec and spec.loader:
                 mod = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = mod
                 spec.loader.exec_module(mod)
                 fm.register_from_module(mod)
                 pm.load_conftest_plugins(mod, dirpath)
@@ -1169,6 +1178,13 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
         if parent == dirpath:
             break
         dirpath = parent
+
+
+_module_cache: dict = {}
+
+
+def _module_cache_clear():
+    _module_cache.clear()
 
 
 def _execute_test(path: str, name: str, args_json: str):
@@ -1182,22 +1198,28 @@ def _execute_test(path: str, name: str, args_json: str):
     from oxytest._fixtures import get_fixture_manager
     fm = get_fixture_manager()
 
-    # 1. Import module
+    # 1. Import module (cached per filepath)
     filepath = os.path.abspath(path)
     dirpath = os.path.dirname(filepath)
-    if dirpath not in _sys.path:
-        _sys.path.insert(0, dirpath)
 
-    module_name = filepath.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
-    module_name = module_name.lstrip(".")
+    if filepath not in _module_cache:
+        if dirpath not in _sys.path:
+            _sys.path.insert(0, dirpath)
 
-    spec = importlib.util.spec_from_file_location(module_name, filepath)
-    if not spec or not spec.loader:
-        raise ImportError(f"Could not load spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    _sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)
-    fm.register_from_module(mod)
+        # Build a dotted module name from relative path so relative imports work
+        rel_path = os.path.relpath(filepath)
+        module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+
+        spec = importlib.util.spec_from_file_location(module_name, filepath)
+        if not spec or not spec.loader:
+            raise ImportError(f"Could not load spec for {path}")
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules[module_name] = mod
+        spec.loader.exec_module(mod)
+        fm.register_from_module(mod)
+        _module_cache[filepath] = mod
+    else:
+        mod = _module_cache[filepath]
 
     # 2. Resolve function
     raw_name = name
@@ -1421,7 +1443,8 @@ def _expand_parametrize(tests: list) -> list:
                     try:
                         args_json = json.dumps(values)
                     except TypeError:
-                        args_json = json.dumps(values, default=repr)
+                        args_json = json.dumps(list(_json_safe(v) for v in values))
+                    test_clone = TestItem()
                     test_clone = TestItem()
                     test_clone.path = test.path
                     if len(values) == 1 and len(argnames) == 1:
@@ -1436,6 +1459,19 @@ def _expand_parametrize(tests: list) -> list:
             expanded.append(test)
 
     return expanded
+
+
+def _json_safe(obj):
+    """Convert non-JSON-serializable objects to JSON-safe representations."""
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    if isinstance(obj, bytes):
+        return repr(obj)
+    if isinstance(obj, dict):
+        return {_json_safe(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(i) for i in obj]
+    return repr(obj)
 
 
 _oxytest_api = [
