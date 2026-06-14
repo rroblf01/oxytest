@@ -19,3 +19,5 @@ site/
 # Benchmarks
 *.bench
 benchmarks/_generated/
+
+*.so
