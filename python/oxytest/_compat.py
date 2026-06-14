@@ -114,6 +114,34 @@ class RaisesContext:
         self.excinfo = (exc_type, exc_val, exc_tb)
         return True
 
+    @property
+    def value(self):
+        if self.excinfo is None:
+            raise ValueError("No exception was raised")
+        return self.excinfo[1]
+
+    @property
+    def traceback(self):
+        if self.excinfo is None:
+            return None
+        return self.excinfo[2]
+
+    def getrepr(self, **kwargs):
+        if self.excinfo is None:
+            return None
+        return _ExceptionRepr(self.excinfo, **kwargs)
+
+    def group_contains(self, exc_type, *, match=None, depth=None):
+        if self.excinfo is None:
+            return False
+        exc_val = self.excinfo[1]
+        if hasattr(exc_val, "exceptions"):
+            for e in exc_val.exceptions:
+                if isinstance(e, exc_type):
+                    if match is None or re.search(match, str(e)):
+                        return True
+        return isinstance(exc_val, exc_type)
+
 
 def raises(
     expected_exception: Union[Type[BaseException], Tuple[Type[BaseException], ...]],
@@ -128,6 +156,75 @@ def raises(
             return None
         raise Failed(f"DID NOT RAISE {expected_exception}")
     return RaisesContext(expected_exception, match=match)
+
+
+class PytestDeprecationWarning(FutureWarning):
+    """Warning for deprecated pytest features."""
+
+
+import enum
+class ExitCode(enum.IntEnum):
+    OK = 0
+    TESTS_FAILED = 1
+    INTERRUPTED = 2
+    USAGE_ERROR = 3
+    NO_TESTS_COLLECTED = 4
+
+
+def warns(expected_warning, *args, match=None):
+    """Assert that code raises a particular warning."""
+    import warnings
+    if args:
+        func = args[0]
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            func(*args[1:])
+            for warning in w:
+                if issubclass(warning.category, expected_warning):
+                    if match is None or re.search(match, str(warning.message)):
+                        return warning
+        raise Failed(f"DID NOT WARN {expected_warning}")
+    return _WarningsChecker(expected_warning, match=match)
+
+
+class _WarningsChecker:
+    def __init__(self, expected_warning, match=None):
+        self.expected_warning = expected_warning
+        self.match = match
+        self.warning = None
+
+    def __enter__(self):
+        import warnings
+        self._warnings = warnings.catch_warnings(record=True)
+        self._cm = self._warnings.__enter__()
+        warnings.simplefilter("always")
+        return self
+
+    def __exit__(self, *exc_info):
+        self._warnings.__exit__(*exc_info)
+        for w in self._cm:
+            if issubclass(w.category, self.expected_warning):
+                if self.match is None or re.search(self.match, str(w.message)):
+                    self.warning = w
+                    return True
+        raise Failed(f"DID NOT WARN {self.expected_warning}")
+
+
+class _ExceptionRepr:
+    def __init__(self, excinfo, **kwargs):
+        self._excinfo = excinfo
+        self._kwargs = kwargs
+
+    def __str__(self):
+        return str(self._excinfo[1])
+
+
+class PytestWarning(UserWarning):
+    """Base class for pytest warnings."""
+
+
+class PytestDeprecationWarning(FutureWarning):
+    """Warning for deprecated pytest features."""
 
 
 def skip(reason: str = "") -> None:
@@ -166,7 +263,12 @@ class MarkDecorator:
         self.args = args
         self.kwargs = kwargs or {}
 
-    def __call__(self, func):
+    def __call__(self, func=None, *extra_args, **extra_kwargs):
+        if func is None:
+            # Called as mark.foo()() → create a deeper mark
+            new_kwargs = dict(self.kwargs)
+            new_kwargs.update(extra_kwargs)
+            return MarkDecorator(self.name, self.args + extra_args, new_kwargs)
         if not hasattr(func, "_oxytest_marks"):
             func._oxytest_marks = []
         func._oxytest_marks.append((self.name, self.args, self.kwargs))
@@ -174,6 +276,13 @@ class MarkDecorator:
 
 
 class Mark:
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name == "mark":
+            return self
+        return MarkDecorator(name)
+
     def parametrize(self, argnames, argvalues, *args, **kwargs):
         return MarkDecorator("parametrize", (argnames, argvalues) + args, kwargs)
 
@@ -183,14 +292,14 @@ class Mark:
     def skipif(self, condition, reason: Optional[str] = None):
         return MarkDecorator("skipif", (condition,), {"reason": reason})
 
-    def xfail(self, condition=None, reason: Optional[str] = None, raises=None, strict=None):
-        return MarkDecorator("xfail", (), {"condition": condition, "reason": reason, "raises": raises, "strict": strict})
+    def xfail(self, condition=None, reason: Optional[str] = None, raises=None, strict=None, run=True):
+        return MarkDecorator("xfail", (), {"condition": condition, "reason": reason, "raises": raises, "strict": strict, "run": run})
 
     def usefixtures(self, *fixture_names):
         return MarkDecorator("usefixtures", fixture_names)
 
-    def filterwarnings(self, action: str):
-        return MarkDecorator("filterwarnings", (action,))
+    def filterwarnings(self, *actions: str, **kwargs):
+        return MarkDecorator("filterwarnings", actions, kwargs)
 
 
 mark = Mark()
@@ -232,6 +341,7 @@ def fixture(
     params: Optional[list] = None,
     autouse: bool = False,
     name: Optional[str] = None,
+    ids: Optional[list] = None,
 ):
     if callable(scope):
         func = scope
@@ -1234,7 +1344,51 @@ def _expand_parametrize(tests: list) -> list:
             continue
 
         if "::" in test.name:
-            expanded.append(test)
+            parts = test.name.split("::")
+            cls = getattr(mod, parts[0], None)
+            if cls is None:
+                expanded.append(test)
+                continue
+
+            method = getattr(cls, parts[1], None) if len(parts) > 1 else None
+            if method is None:
+                expanded.append(test)
+                continue
+
+            marks = getattr(method, "_oxytest_marks", [])
+            has_parametrize = False
+            for mark_name, mark_args, mark_kwargs in marks:
+                if mark_name == "parametrize" and len(mark_args) >= 2:
+                    has_parametrize = True
+                    argnames_str = mark_args[0]
+                    argvalues_list = mark_args[1]
+                    if isinstance(argnames_str, str):
+                        argnames = [a.strip() for a in argnames_str.split(",")]
+                    else:
+                        argnames = list(argnames_str)
+                    for i, val in enumerate(argvalues_list):
+                        if isinstance(val, dict) and "values" in val:
+                            values = val["values"]
+                        elif isinstance(val, (list, tuple)):
+                            values = list(val)
+                        else:
+                            values = [val]
+                        import json
+                        try:
+                            args_json = json.dumps(values)
+                        except TypeError:
+                            args_json = json.dumps(values, default=repr)
+                        test_clone = TestItem()
+                        test_clone.path = test.path
+                        if len(values) == 1 and len(argnames) == 1:
+                            test_clone.name = f"{test.name}[{values[0]}]"
+                        else:
+                            test_clone.name = f"{test.name}[{i}]"
+                        test_clone.line_no = test.line_no
+                        test_clone.args_json = args_json
+                        expanded.append(test_clone)
+            if not has_parametrize:
+                expanded.append(test)
             continue
 
         func = getattr(mod, test.name, None)
@@ -1264,6 +1418,10 @@ def _expand_parametrize(tests: list) -> list:
                         values = [val]
 
                     import json
+                    try:
+                        args_json = json.dumps(values)
+                    except TypeError:
+                        args_json = json.dumps(values, default=repr)
                     test_clone = TestItem()
                     test_clone.path = test.path
                     if len(values) == 1 and len(argnames) == 1:
@@ -1271,7 +1429,7 @@ def _expand_parametrize(tests: list) -> list:
                     else:
                         test_clone.name = f"{test.name}[{i}]"
                     test_clone.line_no = test.line_no
-                    test_clone.args_json = json.dumps(values)
+                    test_clone.args_json = args_json
                     expanded.append(test_clone)
 
         if not has_parametrize:
@@ -1308,6 +1466,10 @@ _oxytest_api = [
     "MarkDecorator",
     "raises",
     "RaisesContext",
+    "PytestDeprecationWarning",
+    "ExitCode",
+    "warns",
+    "PytestWarning",
 ]
 
 __all__ = _oxytest_api

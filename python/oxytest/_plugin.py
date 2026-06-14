@@ -145,16 +145,19 @@ def hookspec(tryfirst=False, trylast=False, hookwrapper=False):
 
 
 def hookimpl(tryfirst=False, trylast=False,
-             hookwrapper=False, optionalhook=False):
+             hookwrapper=False, optionalhook=False,
+             wrapper=False):
     """Decorator for plugin hook implementations.
 
     Can be used as ``@hookimpl`` or ``@hookimpl(tryfirst=True)``.
+    ``wrapper`` is an alias for ``hookwrapper`` (compatibility with pluggy >=1.7).
     """
     # Allow bare @hookimpl usage (without parentheses)
     if callable(tryfirst):
         return _hook_impl(tryfirst)
     return _hook_impl(tryfirst=tryfirst, trylast=trylast,
-                      hookwrapper=hookwrapper, optionalhook=optionalhook)
+                      hookwrapper=hookwrapper or wrapper,
+                      optionalhook=optionalhook)
 
 
 # Re-export the raw markers for advanced use

@@ -3,8 +3,8 @@
 > A 100% pytest-compatible test runner written in Python + Rust via PyO3 and Maturin.
 > Designed for speed in large codebases.
 
-[![PyPI](https://img.shields.io/pypi/v/oxytest)](https://pypi.org/project/oxytest/)
-[![Python](https://img.shields.io/pypi/pyversions/oxytest)](https://pypi.org/project/oxytest/)
+[![PyPI](https://img.shields.io/pypi/v/oxytest?cacheSeconds=300)](https://pypi.org/project/oxytest/)
+[![Python](https://img.shields.io/pypi/pyversions/oxytest?cacheSeconds=300)](https://pypi.org/project/oxytest/)
 [![License](https://img.shields.io/github/license/rroblf01/oxytest)](https://github.com/rroblf01/oxytest/blob/main/LICENSE)
 
 ## Why Oxytest?

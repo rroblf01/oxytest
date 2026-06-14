@@ -23,6 +23,11 @@ from oxytest._compat import (
     MarkDecorator,
     Config,
     Parser,
+    PytestDeprecationWarning,
+    PytestWarning,
+    ExitCode,
+    warns,
+    RaisesContext,
 )
 from oxytest._fixtures import (
     MonkeyPatch,
@@ -74,5 +79,10 @@ __all__ = [
     "hookspec",
     "Config",
     "Parser",
+    "PytestDeprecationWarning",
+    "PytestWarning",
+    "ExitCode",
+    "warns",
+    "RaisesContext",
     "__version__",
 ]

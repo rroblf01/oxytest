@@ -266,6 +266,11 @@ class MonkeyPatch:
         self._saved.append(("env", name, old))
         del os.environ[name]
 
+    def chdir(self, path):
+        old = os.getcwd()
+        self._saved.append(("cwd", old))
+        os.chdir(path)
+
     def undo(self):
         for item in reversed(self._saved):
             if item[0] == "env":
@@ -274,6 +279,9 @@ class MonkeyPatch:
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = old
+            elif item[0] == "cwd":
+                old = item[1]
+                os.chdir(old)
             elif len(item) == 3:
                 target, name, old = item
                 if old is _NOT_SET:
