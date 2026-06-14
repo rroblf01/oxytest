@@ -1,0 +1,14 @@
+[package]
+name = "oxytest-core"
+version = "0.1.0"
+edition = "2021"
+description = "Oxytest Rust core - fast pytest-compatible test runner"
+
+[lib]
+name = "oxytest_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module"] }
+rayon = "1.10"
+walkdir = "2.5"

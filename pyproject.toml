@@ -1,0 +1,26 @@
+[project]
+name = "oxytest"
+version = "0.1.0"
+description = "A 100% pytest-compatible test runner written in Python + Rust, optimized for speed"
+readme = "README.md"
+authors = [
+    { name = "Ricardo Robles", email = "ricardo.r.f@hotmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "oxytest._core"
+
+[project.scripts]
+oxytest = "oxytest:main"
+
+[project.urls]
+Documentation = "https://oxytest.dev"
+Repository = "https://github.com/ricardoroble/oxytest"

@@ -1,0 +1,34 @@
+site_name: Oxytest
+site_url: https://oxytest.dev
+repo_url: https://github.com/ricardoroble/oxytest
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Usage: usage.md
+  - API Reference: api-reference.md
+  - Benchmarks: benchmarks.md
+  - Contributing: contributing.md
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: en
+          default: true
+          name: English
+        - locale: es
+          name: Español
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - pymdownx.superfences
