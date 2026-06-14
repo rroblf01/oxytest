@@ -55,16 +55,13 @@ jobs:
           uv pip install maturin --system
           maturin build --out dist
       - name: Install wheel and test deps
-        env:
-          UV_PYTHON_PREFERENCE: only-system
         run: |
-          uv venv
-          uv pip install dist/*.whl
-          uv pip install pytest
+          uv pip install --system dist/*.whl
+          uv pip install --system pytest
       - name: Run tests
         run: |
-          uv run --no-project python -m pytest tests/test_*.py -v
-          uv run --no-project oxytest tests/sample_tests/ -v
+          python -m pytest tests/ -v --ignore=tests/sample_tests
+          python -m oxytest tests/sample_tests/ -v
 
   test-windows:
     runs-on: windows-latest
@@ -81,16 +78,16 @@ jobs:
           uv pip install maturin --system
           maturin build --out dist
       - name: Install wheel and test deps
-        env:
-          UV_PYTHON_PREFERENCE: only-system
+        shell: pwsh
         run: |
-          uv venv
-          uv pip install dist/*.whl
-          uv pip install pytest
+          $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
+          uv pip install --system $wheel.FullName
+          uv pip install --system pytest
       - name: Run tests
+        shell: pwsh
         run: |
-          uv run --no-project python -m pytest tests/test_*.py -v
-          uv run --no-project oxytest tests/sample_tests/ -v
+          python -m pytest tests/ -v --ignore=tests/sample_tests
+          python -m oxytest tests/sample_tests/ -v
 
   test-macos:
     runs-on: macos-latest
@@ -107,13 +104,10 @@ jobs:
           uv pip install maturin --system
           maturin build --out dist
       - name: Install wheel and test deps
-        env:
-          UV_PYTHON_PREFERENCE: only-system
         run: |
-          uv venv
-          uv pip install dist/*.whl
-          uv pip install pytest
+          uv pip install --system dist/*.whl
+          uv pip install --system pytest
       - name: Run tests
         run: |
-          uv run --no-project python -m pytest tests/test_*.py -v
-          uv run --no-project oxytest tests/sample_tests/ -v
+          python -m pytest tests/ -v --ignore=tests/sample_tests
+          python -m oxytest tests/sample_tests/ -v
