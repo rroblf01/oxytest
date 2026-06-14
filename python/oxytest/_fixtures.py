@@ -5,6 +5,7 @@ import tempfile
 import pathlib
 import shutil
 import inspect
+import asyncio
 from typing import Any, Callable, Dict, Generator, Optional
 
 
@@ -32,8 +33,11 @@ class FixtureManager:
         self._cache: Dict[str, Any] = {}
         self._active_scopes: Dict[str, str] = {}
         self._generators: Dict[str, Generator] = {}
+        self._async_generators: Dict[str, Any] = {}
         self._resolved_fixtures: list[Any] = []
         self._tmpdirs: list = []
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
         self._setup_builtins()
 
     def _setup_builtins(self):
@@ -78,7 +82,20 @@ class FixtureManager:
             raise LookupError(f"Fixture {name!r} not found")
 
         fdef = self._fixtures[name]
-        value = fdef.func()
+
+        if inspect.isasyncgenfunction(fdef.func):
+            agen = fdef.func()
+            try:
+                value = self._loop.run_until_complete(agen.__anext__())
+            except StopAsyncIteration:
+                value = None
+            self._async_generators[name] = agen
+            if setup_show:
+                os.write(2, f"  TEARDOWN {name} (async yield)\n".encode())
+        elif inspect.iscoroutinefunction(fdef.func):
+            value = self._loop.run_until_complete(fdef.func())
+        else:
+            value = fdef.func()
 
         if inspect.isgenerator(value):
             try:
@@ -102,6 +119,15 @@ class FixtureManager:
 
     def cleanup(self, scope: str = "function"):
         setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
+        for name, agen in self._async_generators.items():
+            try:
+                self._loop.run_until_complete(agen.__anext__())
+            except StopAsyncIteration:
+                pass
+            self._loop.run_until_complete(agen.aclose())
+            if setup_show:
+                os.write(2, f"  TEARDOWN {name} (async yield)\n".encode())
+        self._async_generators.clear()
         for name, gen in self._generators.items():
             try:
                 next(gen)

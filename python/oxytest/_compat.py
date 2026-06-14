@@ -233,6 +233,15 @@ def fixture(
     autouse: bool = False,
     name: Optional[str] = None,
 ):
+    if callable(scope):
+        func = scope
+        func._oxytest_fixture = {
+            "scope": "function",
+            "params": None,
+            "autouse": False,
+            "name": func.__name__,
+        }
+        return func
     def decorator(func):
         func._oxytest_fixture = {
             "scope": scope,
@@ -1078,6 +1087,7 @@ def _execute_test(path: str, name: str, args_json: str):
     mod = importlib.util.module_from_spec(spec)
     _sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
+    fm.register_from_module(mod)
 
     # 2. Resolve function
     raw_name = name
@@ -1145,7 +1155,13 @@ def _execute_test(path: str, name: str, args_json: str):
 
     # 5. Call test
     try:
-        if param_values:
+        import asyncio as _asyncio
+        if inspect.iscoroutinefunction(func):
+            if param_values:
+                _asyncio.run(func(*param_values))
+            else:
+                _asyncio.run(func())
+        elif param_values:
             func(*param_values)
         else:
             func()
