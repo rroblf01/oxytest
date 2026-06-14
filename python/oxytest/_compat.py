@@ -217,6 +217,9 @@ class _WarningsChecker:
                     return True
         raise Failed(f"DID NOT WARN {self.expected_warning}")
 
+    def __len__(self):
+        return 1 if self.warning is not None else 0
+
 
 class _ExceptionRepr:
     def __init__(self, excinfo, **kwargs):
@@ -323,15 +326,46 @@ def param(*values, marks=None, id: Optional[str] = None):
 
 
 class FixtureRequest:
-    def __init__(self, scope: str = "function"):
+    def __init__(self, scope: str = "function", _test_func=None):
         self.scope = scope
         self.fixtures: Dict[str, Any] = {}
         self._fixturedefs: Dict[str, Any] = {}
+        self._test_func = _test_func
+        self.param = None
+
+    @property
+    def node(self):
+        return _RequestNode(self._test_func)
 
     def getfixturevalue(self, name: str) -> Any:
         if name in self.fixtures:
             return self.fixtures[name]
         raise LookupError(f"Fixture {name!r} not found")
+
+
+class _RequestNode:
+    def __init__(self, test_func=None):
+        self._test_func = test_func
+
+    @property
+    def name(self):
+        if self._test_func is not None:
+            return self._test_func.__name__
+        return ""
+
+    def get_closest_marker(self, name):
+        if self._test_func is not None and hasattr(self._test_func, "_oxytest_marks"):
+            for mark_name, mark_args, mark_kwargs in self._test_func._oxytest_marks:
+                if mark_name == name:
+                    return _Marker(name, mark_args, mark_kwargs)
+        return None
+
+
+class _Marker:
+    def __init__(self, name, args, kwargs):
+        self.name = name
+        self.args = args
+        self.kwargs = kwargs
 
 
 class TempPathFactory:
@@ -711,6 +745,8 @@ def _run_tests(
         _clear_cache()
 
     root_paths = [rootdir] if rootdir else paths
+
+    _module_cache_clear()
 
     all_tests = []
     for path in root_paths:
@@ -1181,10 +1217,12 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
 
 
 _module_cache: dict = {}
+_parametrize_cache: dict = {}
 
 
 def _module_cache_clear():
     _module_cache.clear()
+    _parametrize_cache.clear()
 
 
 def _execute_test(path: str, name: str, args_json: str):
@@ -1216,10 +1254,11 @@ def _execute_test(path: str, name: str, args_json: str):
         mod = importlib.util.module_from_spec(spec)
         _sys.modules[module_name] = mod
         spec.loader.exec_module(mod)
-        fm.register_from_module(mod)
         _module_cache[filepath] = mod
     else:
         mod = _module_cache[filepath]
+
+    fm.register_from_module(mod)
 
     # 2. Resolve function
     raw_name = name
@@ -1234,12 +1273,19 @@ def _execute_test(path: str, name: str, args_json: str):
     else:
         func = getattr(mod, clean_name)
 
+    fm.current_test_func = func
+
     # 3. Parse parametrize args
+    import json
+    param_values = []
     if args_json:
-        import json
-        param_values = json.loads(args_json)
-    else:
-        param_values = []
+        try:
+            param_values = json.loads(args_json)
+        except Exception:
+            pass
+    cache_key = (filepath, name)
+    if cache_key in _parametrize_cache:
+        param_values = list(_parametrize_cache[cache_key])
 
     # 4. Collect fixture names from signature and marks
     sig = inspect.signature(func)
@@ -1338,9 +1384,10 @@ def _execute_test(path: str, name: str, args_json: str):
 
 def _expand_parametrize(tests: list) -> list:
     import importlib.util
+    import sys as _sys
+    import os as _os
 
     expanded = []
-    file_cache = {}
 
     for test in tests:
 
@@ -1348,115 +1395,133 @@ def _expand_parametrize(tests: list) -> list:
             expanded.append(test)
             continue
 
-        filepath = test.path
-        if filepath not in file_cache:
+        filepath = os.path.abspath(test.path)
+        if filepath not in _module_cache:
             try:
-                module_name = filepath.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+                rel_path = _os.path.relpath(filepath)
+                module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+                dirpath = _os.path.dirname(_os.path.abspath(filepath))
+                if dirpath not in _sys.path:
+                    _sys.path.insert(0, dirpath)
                 spec = importlib.util.spec_from_file_location(module_name, filepath)
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
-                    file_cache[filepath] = mod
+                    _sys.modules[module_name] = mod
                     spec.loader.exec_module(mod)
-            except Exception:
-                file_cache[filepath] = None
+                    _module_cache[filepath] = mod
+                else:
+                    _module_cache[filepath] = None
+            except Exception as exc:
+                import sys as _sys2
+                print(f"  [oxytest] Warning: could not import {filepath}: {exc}", file=_sys2.stderr)
+                _module_cache[filepath] = None
 
-        mod = file_cache.get(filepath)
+        mod = _module_cache.get(filepath)
         if mod is None:
             expanded.append(test)
             continue
 
+        # Find the function/method and its marks
+        func = None
         if "::" in test.name:
             parts = test.name.split("::")
             cls = getattr(mod, parts[0], None)
-            if cls is None:
-                expanded.append(test)
-                continue
+            if cls and len(parts) > 1:
+                func = getattr(cls, parts[1], None)
+        else:
+            func = getattr(mod, test.name, None)
 
-            method = getattr(cls, parts[1], None) if len(parts) > 1 else None
-            if method is None:
-                expanded.append(test)
-                continue
-
-            marks = getattr(method, "_oxytest_marks", [])
-            has_parametrize = False
-            for mark_name, mark_args, mark_kwargs in marks:
-                if mark_name == "parametrize" and len(mark_args) >= 2:
-                    has_parametrize = True
-                    argnames_str = mark_args[0]
-                    argvalues_list = mark_args[1]
-                    if isinstance(argnames_str, str):
-                        argnames = [a.strip() for a in argnames_str.split(",")]
-                    else:
-                        argnames = list(argnames_str)
-                    for i, val in enumerate(argvalues_list):
-                        if isinstance(val, dict) and "values" in val:
-                            values = val["values"]
-                        elif isinstance(val, (list, tuple)):
-                            values = list(val)
-                        else:
-                            values = [val]
-                        import json
-                        try:
-                            args_json = json.dumps(values)
-                        except TypeError:
-                            args_json = json.dumps(values, default=repr)
-                        test_clone = TestItem()
-                        test_clone.path = test.path
-                        if len(values) == 1 and len(argnames) == 1:
-                            test_clone.name = f"{test.name}[{values[0]}]"
-                        else:
-                            test_clone.name = f"{test.name}[{i}]"
-                        test_clone.line_no = test.line_no
-                        test_clone.args_json = args_json
-                        expanded.append(test_clone)
-            if not has_parametrize:
-                expanded.append(test)
-            continue
-
-        func = getattr(mod, test.name, None)
         if func is None:
             expanded.append(test)
             continue
 
         marks = getattr(func, "_oxytest_marks", [])
-        has_parametrize = False
+        # Separate parametrize marks from other marks
+        parametrize_marks = []
         for mark_name, mark_args, mark_kwargs in marks:
             if mark_name == "parametrize" and len(mark_args) >= 2:
-                has_parametrize = True
-                argnames_str = mark_args[0]
-                argvalues_list = mark_args[1]
+                parametrize_marks.append((mark_args, mark_kwargs))
 
-                if isinstance(argnames_str, str):
-                    argnames = [a.strip() for a in argnames_str.split(",")]
-                else:
-                    argnames = list(argnames_str)
-
-                for i, val in enumerate(argvalues_list):
-                    if isinstance(val, dict) and "values" in val:
-                        values = val["values"]
-                    elif isinstance(val, (list, tuple)):
-                        values = list(val)
-                    else:
-                        values = [val]
-
-                    import json
-                    try:
-                        args_json = json.dumps(values)
-                    except TypeError:
-                        args_json = json.dumps(list(_json_safe(v) for v in values))
-                    test_clone = TestItem()
-                    test_clone = TestItem()
-                    test_clone.path = test.path
-                    if len(values) == 1 and len(argnames) == 1:
-                        test_clone.name = f"{test.name}[{values[0]}]"
-                    else:
-                        test_clone.name = f"{test.name}[{i}]"
-                    test_clone.line_no = test.line_no
-                    test_clone.args_json = args_json
-                    expanded.append(test_clone)
-
-        if not has_parametrize:
+        if not parametrize_marks:
             expanded.append(test)
+            continue
+
+        # Expand parametrize marks (cartesian product for multiple decorators)
+        all_value_sets = []
+        for mark_args, mark_kwargs in parametrize_marks:
+            argnames_str = mark_args[0]
+            argvalues_list = mark_args[1]
+            ids_opt = mark_kwargs.get("ids")
+
+            if isinstance(argnames_str, str):
+                argnames = [a.strip() for a in argnames_str.split(",")]
+            else:
+                argnames = list(argnames_str)
+
+            value_sets = []
+            for i, val in enumerate(argvalues_list):
+                if isinstance(val, dict) and "values" in val:
+                    values = val["values"]
+                elif isinstance(val, (list, tuple)):
+                    values = list(val)
+                else:
+                    values = [val]
+
+                # Resolve custom id if provided
+                if ids_opt is not None:
+                    if callable(ids_opt):
+                        custom_id = ids_opt(val)
+                    elif isinstance(ids_opt, (list, tuple)) and i < len(ids_opt):
+                        custom_id = ids_opt[i]
+                    else:
+                        custom_id = str(i)
+                else:
+                    custom_id = None
+
+                value_sets.append((argnames, values, custom_id))
+
+            all_value_sets.append(value_sets)
+
+        # Build cartesian product of all parametrize marks
+        if len(all_value_sets) == 1:
+            combos = [(i, vs) for i, vs in enumerate(all_value_sets[0])]
+        else:
+            import itertools
+            combos = []
+            for idx, combo in enumerate(itertools.product(*all_value_sets)):
+                # Flatten: combo is tuple of (argnames, values, custom_id) per mark
+                all_argnames = []
+                all_values = []
+                id_parts = []
+                for argnames, values, custom_id in combo:
+                    all_argnames.extend(argnames)
+                    all_values.extend(values)
+                    if custom_id is not None:
+                        id_parts.append(str(custom_id))
+                if id_parts:
+                    final_id = "-".join(id_parts)
+                else:
+                    final_id = str(idx)
+                combos.append((idx, (all_argnames, all_values, final_id)))
+
+        for idx, (argnames, values, custom_id) in combos:
+            import json
+            try:
+                args_json = json.dumps(values)
+            except TypeError:
+                args_json = "[]"
+            test_clone = TestItem()
+            test_clone.path = test.path
+            if custom_id is not None:
+                test_clone.name = f"{test.name}[{custom_id}]"
+            elif len(values) == 1 and len(argnames) == 1:
+                test_clone.name = f"{test.name}[{values[0]}]"
+            else:
+                test_clone.name = f"{test.name}[{idx}]"
+            test_clone.line_no = test.line_no
+            test_clone.args_json = args_json
+            _parametrize_cache[(filepath, test_clone.name)] = values
+            expanded.append(test_clone)
 
     return expanded
 

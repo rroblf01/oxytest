@@ -38,6 +38,7 @@ class FixtureManager:
         self._tmpdirs: list = []
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        self.current_test_func = None
         self._setup_builtins()
 
     def _setup_builtins(self):
@@ -69,8 +70,21 @@ class FixtureManager:
             if hasattr(obj, "_oxytest_fixture"):
                 self.register(obj)
 
-    def resolve(self, name: str, scope: str = "function") -> Any:
+    def resolve(self, name: str, scope: str = "function", _resolving: set = None) -> Any:
+        if _resolving is None:
+            _resolving = set()
+        if name in _resolving:
+            raise LookupError(f"Circular fixture dependency detected for {name!r}")
+        _resolving.add(name)
+        try:
+            return self._resolve_impl(name, scope, _resolving)
+        finally:
+            _resolving.discard(name)
+
+    def _resolve_impl(self, name: str, scope: str = "function", _resolving: set = None) -> Any:
         setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
+        if setup_show:
+            os.write(2, f"SETUP    {name}\n".encode())
         if setup_show:
             os.write(2, f"SETUP    {name}\n".encode())
         if name in self._cache:
@@ -83,8 +97,27 @@ class FixtureManager:
 
         fdef = self._fixtures[name]
 
+        # Resolve fixture function arguments recursively
+        import inspect as _inspect
+        fixture_sig = _inspect.signature(fdef.func)
+        fixture_args = []
+        for pname, param in fixture_sig.parameters.items():
+            if pname == "self":
+                continue
+            if pname == "request":
+                from oxytest._compat import FixtureRequest
+                fixture_args.append(FixtureRequest(scope=scope, _test_func=self.current_test_func))
+            elif pname in self._fixtures:
+                sub_value = self.resolve(pname, scope=scope, _resolving=_resolving)
+                fixture_args.append(sub_value)
+            elif param.default is not param.empty:
+                fixture_args.append(param.default)
+            else:
+                # Skip unknown parameters - they may be provided by parametrization
+                pass
+
         if inspect.isasyncgenfunction(fdef.func):
-            agen = fdef.func()
+            agen = fdef.func(*fixture_args)
             try:
                 value = self._loop.run_until_complete(agen.__anext__())
             except StopAsyncIteration:
@@ -93,9 +126,9 @@ class FixtureManager:
             if setup_show:
                 os.write(2, f"  TEARDOWN {name} (async yield)\n".encode())
         elif inspect.iscoroutinefunction(fdef.func):
-            value = self._loop.run_until_complete(fdef.func())
+            value = self._loop.run_until_complete(fdef.func(*fixture_args))
         else:
-            value = fdef.func()
+            value = fdef.func(*fixture_args)
 
         if inspect.isgenerator(value):
             try:
