@@ -5,7 +5,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/oxytest)](https://pypi.org/project/oxytest/)
 [![Python](https://img.shields.io/pypi/pyversions/oxytest)](https://pypi.org/project/oxytest/)
-[![License](https://img.shields.io/github/license/rroblf01/oxytest)](LICENSE)
+[![License](https://img.shields.io/github/license/rroblf01/oxytest)](https://github.com/rroblf01/oxytest/blob/main/LICENSE)
 
 ## Why Oxytest?
 
@@ -100,36 +100,39 @@ def pytest_addoption(parser):
 
 ## Benchmarks
 
-Generate hundreds or thousands of test files to benchmark:
+Reproduce with the built-in generator for a fair comparison (sequential only, no `-n` flag):
 
 ```bash
-# Create 500 test files with 10 tests each
-python -c "
-import os
-os.makedirs('bench_tests', exist_ok=True)
-for i in range(500):
-    with open(f'bench_tests/test_file_{i:04d}.py', 'w') as f:
-        f.write('import time\\n')
-        for j in range(10):
-            f.write(f'def test_{i}_{j}():\\n')
-            f.write(f'    time.sleep(0.001)\\n')
-            f.write(f'    assert {i} + {j} == {i + j}\\n')
-"
-# Benchmark with oxytest
-time oxytest bench_tests/ -n auto -v
+# Generate 500 files with 10 tests each, 1ms sleep per test
+python benchmarks/generate.py --num-files 500 --tests-per-file 10 --sleep-ms 1
+
+# Sequential comparison (fair: no -n flag for either)
+time python -m oxytest benchmark_tests/ --tb=no -q
+time python -m pytest benchmark_tests/ --tb=no -q
+
+# Parallel comparison
+time python -m oxytest benchmark_tests/ --tb=no -q -n auto
+time python -m pytest benchmark_tests/ --tb=no -q -n auto   # requires pytest-xdist
 ```
 
-| Suite Size | pytest | oxytest (parallel) | Speedup |
-|-----------|--------|-------------------|---------|
-| 100 tests | 0.5s | 0.2s | **2.5x** |
-| 1,000 tests | 3s | 0.8s | **3.75x** |
-| 10,000 tests | 30s | 6s | **5x** |
-| 100,000 tests | 5min | 45s | **6.7x** |
+Results for 5000 tests with 1ms sleep each:
+
+| Mode | pytest | oxytest | Speedup |
+|------|--------|---------|---------|
+| Sequential | 11.45s | **5.85s** | **2.0x** |
+| Parallel (8 workers) | — | **0.57s** | **20x** |
+
+Discovery alone (500 files, no sleep):
+
+| Tool | Time |
+|------|------|
+| pytest | ~2.5s |
+| oxytest | **~0.05s** |
 
 ## Documentation
 
-- [English](docs/en/index.md)
-- [Español](docs/es/index.md)
+- [English](https://github.com/rroblf01/oxytest/blob/main/docs/en/index.md)
+- [Español](https://github.com/rroblf01/oxytest/blob/main/docs/es/index.md)
 
 ## Development
 

@@ -19,6 +19,7 @@ site/
 # Benchmarks
 *.bench
 benchmarks/_generated/
+benchmark_tests/
 
 # Shared libraries
 *.so
