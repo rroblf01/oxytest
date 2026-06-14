@@ -1,22 +1,15 @@
 import os
 import re
 import sys
-import math
 import time
-import json
 import xml.etree.ElementTree as ET
-import traceback as tb_module
 from collections import defaultdict
-from contextlib import contextmanager
 from typing import (
     Any,
-    Callable,
     ContextManager,
     Dict,
-    Generator,
     List,
     Optional,
-    Sequence,
     Tuple,
     Type,
     Union,
@@ -292,7 +285,7 @@ def _get_parametrize(func):
 
 
 class TestReport:
-    def __init__(self, test: TestItem, passed: bool, duration_ms: u64, output: str, error: Optional[str]):
+    def __init__(self, test: TestItem, passed: bool, duration_ms: int, output: str, error: Optional[str]):
         self.nodeid = f"{test.path}::{test.name}"
         self.passed = passed
         self.failed = not passed
@@ -323,7 +316,7 @@ class TerminalReporter:
         self.start_time = time.time()
         if not self.quiet:
             print("=" * 60)
-            print(f"oxytest: running tests")
+            print("oxytest: running tests")
             print("=" * 60)
 
     def test_result(self, result: TestResult):
@@ -370,7 +363,7 @@ class TerminalReporter:
                 if result.traceback:
                     lines = result.traceback.split("\n")
                     if self.tb_style == "short":
-                        relevant = [l for l in lines if "raise" in l or "assert" in l or "Error:" in l or "Exception:" in l]
+                        relevant = [line for line in lines if "raise" in line or "assert" in line or "Error:" in line or "Exception:" in line]
                         if relevant:
                             print("\n".join(relevant[-5:]))
                         else:
@@ -465,7 +458,6 @@ def _run_tests(
     maxfail: Optional[int] = None,
 ) -> int:
     from oxytest._fixtures import get_fixture_manager
-    fm = get_fixture_manager()
 
     all_tests = []
     for path in paths:
@@ -494,7 +486,6 @@ def _run_tests(
     else:
         results = run_tests(all_tests, num_workers, nocapture=nocapture)
 
-    had_failure = False
     for result in results:
         reporter.test_result(result)
         if not result.passed and exitfirst:

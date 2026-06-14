@@ -4,8 +4,7 @@ import io
 import tempfile
 import pathlib
 import shutil
-from contextlib import contextmanager
-from typing import Any, Callable, Dict, Generator, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 class FixtureDef:
@@ -102,7 +101,6 @@ class FixtureManager:
         return pathlib.Path(tmpdir)
 
     def _fixture_tmpdir(self):
-        import py  # local import to avoid dependency
         tmpdir = tempfile.mkdtemp(prefix="oxytest_")
         self._tmpdirs.append(tmpdir)
         return tmpdir

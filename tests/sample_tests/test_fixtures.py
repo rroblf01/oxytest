@@ -1,4 +1,3 @@
-import oxytest as pytest
 
 
 class TestWithFixtures:

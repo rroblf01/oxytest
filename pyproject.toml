@@ -36,5 +36,5 @@ module-name = "oxytest._core"
 oxytest = "oxytest:main"
 
 [project.urls]
-Documentation = "https://oxytest.dev"
+Documentation = "https://ricardoroble.github.io/oxytest/"
 Repository = "https://github.com/rroblf01/oxytest"

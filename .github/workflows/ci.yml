@@ -56,6 +56,8 @@ jobs:
           maturin build --out dist
       - name: Install wheel
         run: uv pip install dist/*.whl --system
+      - name: Install test dependencies
+        run: uv pip install pytest --system
       - name: Run tests
         run: |
           python -m pytest tests/ -v
@@ -79,6 +81,8 @@ jobs:
         run: |
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
           uv pip install $wheel.FullName --system
+      - name: Install test dependencies
+        run: uv pip install pytest --system
       - name: Run tests
         run: |
           python -m pytest tests/ -v
@@ -100,6 +104,8 @@ jobs:
           maturin build --out dist
       - name: Install wheel
         run: uv pip install dist/*.whl --system
+      - name: Install test dependencies
+        run: uv pip install pytest --system
       - name: Run tests
         run: |
           python -m pytest tests/ -v
