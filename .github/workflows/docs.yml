@@ -33,9 +33,7 @@ jobs:
           version: "latest"
 
       - name: Install
-        run: |
-          uv sync
-          uv pip install mkdocs mkdocs-material mkdocs-static-i18n pymdown-extensions --system
+        run: uv sync --extra docs
 
       - name: Build site
         env:

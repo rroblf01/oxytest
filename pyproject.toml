@@ -23,6 +23,21 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+docs = [
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocs-static-i18n",
+    "pymdown-extensions",
+]
+test = [
+    "pytest",
+]
+lint = [
+    "ruff",
+    "ty",
+]
+
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"

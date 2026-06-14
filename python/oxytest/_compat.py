@@ -222,7 +222,6 @@ class TempPathFactory:
         self._base = base
 
     def mktemp(self, basename: str) -> str:
-        import tempfile
         path = os.path.join(self._base, basename)
         os.makedirs(path, exist_ok=True)
         return path
@@ -457,8 +456,6 @@ def _run_tests(
     nocapture: bool = False,
     maxfail: Optional[int] = None,
 ) -> int:
-    from oxytest._fixtures import get_fixture_manager
-
     all_tests = []
     for path in paths:
         tests = discover_tests(path, keyword)

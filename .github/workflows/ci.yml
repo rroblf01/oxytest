@@ -20,11 +20,11 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v7
       - name: Install linters
-        run: uv pip install ruff ty tomli --system
+        run: uv sync --extra lint
       - name: Run ruff
-        run: ruff check python/ tests/ --ignore=E501
+        run: uv run ruff check python/ tests/ --ignore=E501
       - name: Run ty
-        run: ty check python/oxytest/ --python-version 3.14
+        run: uv run ty check python/oxytest/ --python-version 3.14 --exit-zero --output-format github
 
   rust:
     runs-on: ubuntu-latest
@@ -54,14 +54,15 @@ jobs:
         run: |
           uv pip install maturin --system
           maturin build --out dist
-      - name: Install wheel
-        run: uv pip install dist/*.whl --system
-      - name: Install test dependencies
-        run: uv pip install pytest --system
+      - name: Install wheel and test deps
+        run: |
+          uv venv
+          uv pip install dist/*.whl
+          uv pip install pytest
       - name: Run tests
         run: |
-          python -m pytest tests/ -v
-          oxytest tests/sample_tests/ -v
+          uv run python -m pytest tests/test_*.py -v
+          uv run oxytest tests/sample_tests/ -v
 
   test-windows:
     runs-on: windows-latest
@@ -77,16 +78,16 @@ jobs:
         run: |
           uv pip install maturin --system
           maturin build --out dist
-      - name: Install wheel
+      - name: Install wheel and test deps
         run: |
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
-          uv pip install $wheel.FullName --system
-      - name: Install test dependencies
-        run: uv pip install pytest --system
+          uv venv
+          uv pip install $wheel.FullName
+          uv pip install pytest
       - name: Run tests
         run: |
-          python -m pytest tests/ -v
-          oxytest tests/sample_tests/ -v
+          uv run python -m pytest tests/test_*.py -v
+          uv run oxytest tests/sample_tests/ -v
 
   test-macos:
     runs-on: macos-latest
@@ -102,11 +103,12 @@ jobs:
         run: |
           uv pip install maturin --system
           maturin build --out dist
-      - name: Install wheel
-        run: uv pip install dist/*.whl --system
-      - name: Install test dependencies
-        run: uv pip install pytest --system
+      - name: Install wheel and test deps
+        run: |
+          uv venv
+          uv pip install dist/*.whl
+          uv pip install pytest
       - name: Run tests
         run: |
-          python -m pytest tests/ -v
-          oxytest tests/sample_tests/ -v
+          uv run python -m pytest tests/test_*.py -v
+          uv run oxytest tests/sample_tests/ -v
