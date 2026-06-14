@@ -332,6 +332,11 @@ class FixtureRequest:
         self._fixturedefs: Dict[str, Any] = {}
         self._test_func = _test_func
         self.param = None
+        self._oxytest_config = None
+
+    @property
+    def config(self):
+        return self._oxytest_config
 
     @property
     def node(self):
@@ -588,6 +593,9 @@ class Config:
         self._opts = opts
         self.parser = parser or Parser()
         self.plugin_options: dict = {}
+        self._inicfg: dict = {}
+        self.rootdir = opts.get("rootdir", None)
+        self._stash_data: dict = {}
 
     def getoption(self, name: str, default=None):
         return self._opts.get(name, default)
@@ -596,8 +604,34 @@ class Config:
     def option(self):
         return self._opts
 
+    def getini(self, name: str):
+        return self._inicfg.get(name, "")
+
+    @property
+    def stash(self):
+        return _ConfigStash(self._stash_data)
+
     def addinivalue_line(self, name: str, line: str):
-        pass  # stub for plugin compatibility
+        if name not in self._inicfg:
+            self._inicfg[name] = []
+        self._inicfg[name].append(line)
+
+
+class _ConfigStash:
+    def __init__(self, data: dict):
+        self._data = data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
 
 
 def _parse_args(args: List[str]) -> dict:
@@ -747,6 +781,14 @@ def _run_tests(
     root_paths = [rootdir] if rootdir else paths
 
     _module_cache_clear()
+    from oxytest._fixtures import get_fixture_manager as _get_fm
+    _get_fm()._config = config
+
+    # Add cwd to sys.path so relative module names resolve
+    import sys as _sys
+    _cwd = os.getcwd()
+    if _cwd not in _sys.path:
+        _sys.path.insert(0, _cwd)
 
     all_tests = []
     for path in root_paths:
@@ -1201,7 +1243,7 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
         seen.add(dirpath)
         conftest_path = os.path.join(dirpath, "conftest.py")
         if os.path.isfile(conftest_path):
-            module_name = conftest_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+            module_name = os.path.relpath(conftest_path).replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
             import importlib.util
             spec = importlib.util.spec_from_file_location(module_name, conftest_path)
             if spec and spec.loader:
@@ -1275,22 +1317,65 @@ def _execute_test(path: str, name: str, args_json: str):
 
     fm.current_test_func = func
 
-    # 3. Parse parametrize args
+    # 3. Parse parametrize args (match by name, not position)
     import json
     param_values = []
+    param_names = []
     if args_json:
         try:
             param_values = json.loads(args_json)
         except Exception:
             pass
     cache_key = (filepath, name)
+    _fixture_params = None
     if cache_key in _parametrize_cache:
-        param_values = list(_parametrize_cache[cache_key])
+        cached = _parametrize_cache[cache_key]
+        if len(cached) == 3:
+            param_names, param_values, _fixture_params = cached
+        else:
+            param_names, param_values = cached
+
+    # Set fixture param for parametrized fixtures
+    if _fixture_params:
+        fm._current_request_param = _fixture_params
 
     # 4. Collect fixture names from signature and marks
     sig = inspect.signature(func)
     all_params = [p for p in sig.parameters.keys() if p != "self"]
-    fixture_params = all_params[len(param_values):]
+
+    # Match parametrize values by name to handle multiple @pytest.mark.parametrize
+    if param_names:
+        param_dict = dict(zip(param_names, param_values))
+        # Build param_values in the exact order of all_params,
+        # leaving None placeholders for fixture params
+        ordered = []
+        fixture_params = []
+        for p in all_params:
+            if p in param_dict:
+                ordered.append(param_dict[p])
+            else:
+                ordered.append(None)
+                fixture_params.append(p)
+        param_values = ordered
+    else:
+        # Flat list (single parametrize mark or JSON args) - match by position
+        fixture_params = all_params[len(param_values):]
+
+    # Resolve fixtures for remaining parameters (in order)
+    for pname in fixture_params:
+        try:
+            val = fm.resolve(pname)
+            # Find the position of this fixture in param_values and fill it
+            if pname in all_params:
+                idx = all_params.index(pname)
+                while len(param_values) <= idx:
+                    param_values.append(None)
+                param_values[idx] = val
+        except LookupError:
+            raise TypeError(
+                f"{raw_name}() missing required argument: '{pname}' "
+                f"(not provided by parametrize args or registered fixtures)"
+            )
 
     # 4a. Resolve autouse fixtures
     for fname, fdef in list(fm._fixtures.items()):
@@ -1316,20 +1401,6 @@ def _execute_test(path: str, name: str, args_json: str):
                     f"{raw_name}() usefixtures requires fixture: '{fname}'"
                 )
 
-    # 5. Resolve fixtures for remaining parameters
-    sig = inspect.signature(func)
-    all_params = [p for p in sig.parameters.keys() if p != "self"]
-    fixture_params = all_params[len(param_values):]
-
-    for pname in fixture_params:
-        try:
-            val = fm.resolve(pname)
-            param_values.append(val)
-        except LookupError:
-            raise TypeError(
-                f"{raw_name}() missing required argument: '{pname}' "
-                f"(not provided by parametrize args or registered fixtures)"
-            )
 
     # 5. Call test
     try:
@@ -1380,6 +1451,7 @@ def _execute_test(path: str, name: str, args_json: str):
         raise
     finally:
         fm.cleanup()
+        fm._current_request_param = None
 
 
 def _expand_parametrize(tests: list) -> list:
@@ -1515,13 +1587,97 @@ def _expand_parametrize(tests: list) -> list:
             if custom_id is not None:
                 test_clone.name = f"{test.name}[{custom_id}]"
             elif len(values) == 1 and len(argnames) == 1:
-                test_clone.name = f"{test.name}[{values[0]}]"
+                val_str = str(values[0])
+                if len(val_str) > 80 or not val_str.isidentifier():
+                    val_str = str(argnames[0])
+                test_clone.name = f"{test.name}[{val_str}]"
             else:
+                # Use short ids for complex parametrize combos
                 test_clone.name = f"{test.name}[{idx}]"
             test_clone.line_no = test.line_no
             test_clone.args_json = args_json
-            _parametrize_cache[(filepath, test_clone.name)] = values
+            _parametrize_cache[(filepath, test_clone.name)] = (argnames, values)
             expanded.append(test_clone)
+
+    # Phase 2: Expand parametrized fixtures
+    # After parametrize expansion, check if any test uses a fixture with params
+    from oxytest._fixtures import get_fixture_manager as _get_fm
+    _fm = _get_fm()
+    _param_fixtures = {n: fdef.params for n, fdef in _fm._fixtures.items() if fdef.params}
+    if _param_fixtures:
+        _extra_expanded = []
+        for test in expanded:
+            filepath = os.path.abspath(test.path)
+            mod = _module_cache.get(filepath)
+            if mod is None:
+                _extra_expanded.append(test)
+                continue
+            # Get the test function
+            func = None
+            if "::" in test.name:
+                parts = test.name.split("::")
+                cls = getattr(mod, parts[0], None)
+                if cls and len(parts) > 1:
+                    func = getattr(cls, parts[1], None)
+            else:
+                clean_name = test.name.split("[")[0] if "[" in test.name else test.name
+                func = getattr(mod, clean_name, None)
+            if func is None:
+                _extra_expanded.append(test)
+                continue
+            # Check if any parameter matches a parametrized fixture
+            import inspect as _inspect
+            sig = _inspect.signature(func)
+            matching_fixtures = {}
+            for pname in sig.parameters.keys():
+                if pname in _param_fixtures:
+                    matching_fixtures[pname] = _param_fixtures[pname]
+            if not matching_fixtures:
+                _extra_expanded.append(test)
+                continue
+
+            # Get existing cache entry (argnames, values) or empty
+            cache_key = (filepath, test.name)
+            existing_argnames = []
+            existing_values = []
+            if cache_key in _parametrize_cache:
+                cached = _parametrize_cache[cache_key]
+                if len(cached) == 2:
+                    existing_argnames, existing_values = cached
+                else:
+                    existing_argnames, existing_values = cached[0], cached[1]
+
+            # Create clones for each fixture param combination
+            import itertools as _itertools
+            _fixture_items = sorted(matching_fixtures.items())
+            _param_combos = list(_itertools.product(*(v for _, v in _fixture_items)))
+            for _idx, _combo in enumerate(_param_combos):
+                _new_values = list(existing_values)
+                _new_argnames = list(existing_argnames)
+                _fixture_params = {}
+                _id_parts = []
+                for (_fname, _), _pval in zip(_fixture_items, _combo):
+                    _fixture_params[_fname] = _pval
+                    _id_parts.append(str(_pval))
+                name_suffix = "-".join(_id_parts)
+                test_clone = TestItem()
+                test_clone.path = test.path
+                test_clone.line_no = test.line_no
+                test_clone.args_json = "[]"
+                # Check if test already has bracket suffix from parametrize
+                if "[" in test.name:
+                    base, bracket = test.name.split("[", 1)
+                    bracket = bracket.rstrip("]")
+                    test_clone.name = f"{base}[{bracket}-{name_suffix}]"
+                else:
+                    test_clone.name = f"{test.name}[{name_suffix}]"
+                _parametrize_cache[(filepath, test_clone.name)] = (
+                    _new_argnames, _new_values, _fixture_params
+                )
+                _extra_expanded.append(test_clone)
+
+        if _extra_expanded:
+            expanded = _extra_expanded
 
     return expanded
 

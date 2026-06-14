@@ -39,6 +39,8 @@ class FixtureManager:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self.current_test_func = None
+        self._config = None
+        self._current_request_param = None
         self._setup_builtins()
 
     def _setup_builtins(self):
@@ -106,7 +108,14 @@ class FixtureManager:
                 continue
             if pname == "request":
                 from oxytest._compat import FixtureRequest
-                fixture_args.append(FixtureRequest(scope=scope, _test_func=self.current_test_func))
+                from oxytest._compat import Config as _OxyConfig
+                req = FixtureRequest(scope=scope, _test_func=self.current_test_func)
+                req._oxytest_config = self._config or _OxyConfig({})
+                if isinstance(self._current_request_param, dict):
+                    req.param = self._current_request_param.get(name)
+                else:
+                    req.param = self._current_request_param
+                fixture_args.append(req)
             elif pname in self._fixtures:
                 sub_value = self.resolve(pname, scope=scope, _resolving=_resolving)
                 fixture_args.append(sub_value)
