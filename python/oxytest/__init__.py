@@ -27,6 +27,7 @@ from oxytest._compat import (
     PytestWarning,
     ExitCode,
     warns,
+    deprecated_call,
     RaisesContext,
 )
 from oxytest._fixtures import (
@@ -83,6 +84,7 @@ __all__ = [
     "PytestWarning",
     "ExitCode",
     "warns",
+    "deprecated_call",
     "RaisesContext",
     "__version__",
 ]

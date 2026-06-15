@@ -195,6 +195,32 @@ def warns(expected_warning, *args, match=None):
     return _WarningsChecker(expected_warning, match=match)
 
 
+def deprecated_call(*args, **kwargs):
+    """Assert that code produces a DeprecationWarning or PendingDeprecationWarning."""
+    return warns((DeprecationWarning, PendingDeprecationWarning), *args, **kwargs)
+
+
+class _WarningsRecorder:
+    """Mimics pytest's WarningsRecorder: is iterable, indexable, has .list and .len."""
+    def __init__(self, inner):
+        self._inner = inner
+        self.list = self
+
+    def __iter__(self):
+        return iter(self._inner)
+
+    def __len__(self):
+        return len(self._inner)
+
+    def __getitem__(self, idx):
+        return self._inner[idx]
+
+    def __contains__(self, item):
+        return item in self._inner
+
+    def __bool__(self):
+        return bool(self._inner)
+
 class _WarningsChecker:
     def __init__(self, expected_warning, match=None):
         self.expected_warning = expected_warning
@@ -206,7 +232,7 @@ class _WarningsChecker:
         self._warnings = warnings.catch_warnings(record=True)
         self._cm = self._warnings.__enter__()
         warnings.simplefilter("always")
-        return self._cm
+        return _WarningsRecorder(self._cm)
 
     def __exit__(self, *exc_info):
         self._warnings.__exit__(*exc_info)
@@ -1438,6 +1464,29 @@ def _execute_test(path: str, name: str, args_json: str):
                 else:
                     req.param = getattr(fm, '_current_request_param', None)
                 val = req
+            elif cls is not None and hasattr(cls, pname):
+                # Check for class-scoped fixtures (e.g. schema_validator, core_schema)
+                cls_method = getattr(cls, pname)
+                if hasattr(cls_method, "_oxytest_fixture"):
+                    import inspect as _cls_inspect
+                    _cls_sig = _cls_inspect.signature(cls_method)
+                    _cls_args = []
+                    for _cpname, _cparam in _cls_sig.parameters.items():
+                        if _cpname == "self":
+                            _cls_args.append(instance)
+                        elif _cpname in fm._fixtures:
+                            _cls_args.append(fm.resolve(_cpname))
+                        elif cls is not None and hasattr(cls, _cpname) and hasattr(getattr(cls, _cpname), "_oxytest_fixture"):
+                            _csub = getattr(cls, _cpname)
+                            _csub_sig = _cls_inspect.signature(_csub)
+                            _csub_args = []
+                            for _cspn, _csp in _csub_sig.parameters.items():
+                                if _cspn == "self":
+                                    _csub_args.append(instance)
+                            _cls_args.append(_csub(*_csub_args))
+                    val = cls_method(*_cls_args)
+                else:
+                    val = fm.resolve(pname)
             else:
                 val = fm.resolve(pname)
             # Find the position of this fixture in param_values and fill it
@@ -1650,6 +1699,11 @@ def _expand_parametrize(tests: list) -> list:
                 value_sets.append((argnames, values, custom_id))
 
             all_value_sets.append(value_sets)
+
+        # If no value sets were collected (e.g. all parametrize marks failed), skip
+        if not all_value_sets:
+            expanded.append(test)
+            continue
 
         # Build cartesian product of all parametrize marks
         if len(all_value_sets) == 1:

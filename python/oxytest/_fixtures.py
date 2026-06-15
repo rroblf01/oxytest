@@ -51,6 +51,7 @@ class FixtureManager:
         self.register_builtin("monkeypatch", self._fixture_monkeypatch, scope="function")
         self.register_builtin("mocker", self._fixture_mocker, scope="function")
         self.register_builtin("benchmark", self._fixture_benchmark, scope="function")
+        self.register_builtin("create_module", self._fixture_create_module, scope="function")
 
     def register_builtin(self, name: str, func: Callable, scope: str = "function"):
         self._fixtures[name] = FixtureDef(func, scope=scope, name=name)
@@ -272,6 +273,19 @@ class FixtureManager:
                 return fn(*args, **kwargs)
         return _BenchmarkStub()
 
+    def _fixture_create_module(self):
+        """Stub for create_module fixture from _pytest.assertion.rewrite."""
+        import types as _types
+        def _create_module(func=None):
+            if func is None:
+                return _create_module
+            ns = {}
+            exec(func.__code__, ns)
+            mod = _types.ModuleType(func.__name__)
+            mod.__dict__.update(ns)
+            return mod
+        return _create_module
+
 
 class MockerFixture:
     """Simplified mock fixture compatible with pytest-mock's mocker fixture."""
@@ -281,15 +295,32 @@ class MockerFixture:
         self._mock = _mock
         self._patches = []
 
-    def patch(self, target, *args, **kwargs):
-        p = self._mock.patch(target, *args, **kwargs)
-        self._patches.append(p)
-        return p.start()
+    @property
+    def patch(self):
+        """Returns a callable that auto-starts patches and tracks them for cleanup."""
+        import unittest.mock as _um
+        _mocker = self
+        class _PatchProxy:
+            def __call__(_self, target, *args, **kwargs):
+                p = _um.patch(target, *args, **kwargs)
+                _mocker._patches.append(p)
+                return p.start()
+            @property
+            def dict(_self):
+                return _um.patch.dict
+            @property
+            def object(_self):
+                return _um.patch.object
+        return _PatchProxy()
 
     def stopall(self):
         for p in self._patches:
             p.stop()
         self._patches.clear()
+
+    def stub(self, name=None):
+        import unittest.mock as _mock
+        return _mock.MagicMock(name=name, spec=_mock.MagicMock)
 
     def spy(self, obj, name):
         import unittest.mock as _mock
@@ -388,7 +419,13 @@ class MonkeyPatch:
         self._saved.append(("cwd", old))
         os.chdir(path)
 
+    def syspath_prepend(self, path):
+        import sys as _sys
+        self._saved.append(("syspath", path))
+        _sys.path.insert(0, path)
+
     def undo(self):
+        import sys as _sys
         for item in reversed(self._saved):
             if item[0] == "env":
                 name, old = item[1], item[2]
@@ -399,6 +436,10 @@ class MonkeyPatch:
             elif item[0] == "cwd":
                 old = item[1]
                 os.chdir(old)
+            elif item[0] == "syspath":
+                path = item[1]
+                if path in _sys.path:
+                    _sys.path.remove(path)
             elif len(item) == 3:
                 target, name, old = item
                 if old is _NOT_SET:
