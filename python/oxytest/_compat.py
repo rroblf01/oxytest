@@ -206,7 +206,7 @@ class _WarningsChecker:
         self._warnings = warnings.catch_warnings(record=True)
         self._cm = self._warnings.__enter__()
         warnings.simplefilter("always")
-        return self
+        return self._cm
 
     def __exit__(self, *exc_info):
         self._warnings.__exit__(*exc_info)
@@ -301,8 +301,8 @@ class Mark:
     def skip(self, reason: Optional[str] = None):
         return MarkDecorator("skip", (), {"reason": reason})
 
-    def skipif(self, condition, reason: Optional[str] = None, **kwargs):
-        return MarkDecorator("skipif", (condition,), {"reason": reason, **kwargs})
+    def skipif(self, *conditions, reason: Optional[str] = None, **kwargs):
+        return MarkDecorator("skipif", conditions, {"reason": reason, **kwargs})
 
     def xfail(self, condition=None, reason: Optional[str] = None, raises=None, strict=None, run=True):
         return MarkDecorator("xfail", (), {"condition": condition, "reason": reason, "raises": raises, "strict": strict, "run": run})
@@ -428,7 +428,7 @@ def _should_skip(func):
             if mark_name == "skip":
                 return kwargs.get("reason", "skipped")
             if mark_name == "skipif":
-                if args and args[0]:
+                if args and any(args):
                     return kwargs.get("reason", "condition true")
     return None
 
@@ -1325,6 +1325,8 @@ def _module_cache_clear():
     _conftest_seen.clear()
 
 
+_import_lock = __import__('threading').Lock()
+
 def _execute_test(path: str, name: str, args_json: str):
     """Import module, resolve fixtures, and run a single test.
     Raises on failure (caught by Rust runner).
@@ -1336,27 +1338,28 @@ def _execute_test(path: str, name: str, args_json: str):
     from oxytest._fixtures import get_fixture_manager
     fm = get_fixture_manager()
 
-    # 1. Import module (cached per filepath)
+    # 1. Import module (cached per filepath) — with lock for parallel safety
     filepath = os.path.abspath(path)
     dirpath = os.path.dirname(filepath)
 
-    if filepath not in _module_cache:
-        if dirpath not in _sys.path:
-            _sys.path.insert(0, dirpath)
+    with _import_lock:
+        if filepath not in _module_cache:
+            if dirpath not in _sys.path:
+                _sys.path.append(dirpath)
 
-        # Build a dotted module name from relative path so relative imports work
-        rel_path = os.path.relpath(filepath)
-        module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+            # Build a dotted module name from relative path so relative imports work
+            rel_path = os.path.relpath(filepath)
+            module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
 
-        spec = importlib.util.spec_from_file_location(module_name, filepath)
-        if not spec or not spec.loader:
-            raise ImportError(f"Could not load spec for {path}")
-        mod = importlib.util.module_from_spec(spec)
-        _sys.modules[module_name] = mod
-        spec.loader.exec_module(mod)
-        _module_cache[filepath] = mod
-    else:
-        mod = _module_cache[filepath]
+            spec = importlib.util.spec_from_file_location(module_name, filepath)
+            if not spec or not spec.loader:
+                raise ImportError(f"Could not load spec for {path}")
+            mod = importlib.util.module_from_spec(spec)
+            _sys.modules[module_name] = mod
+            spec.loader.exec_module(mod)
+            _module_cache[filepath] = mod
+        else:
+            mod = _module_cache[filepath]
 
     fm.register_from_module(mod)
 
@@ -1587,6 +1590,14 @@ def _expand_parametrize(tests: list) -> list:
             continue
 
         marks = getattr(func, "_oxytest_marks", [])
+        # Also check module-level pytestmark
+        mod_marks = getattr(mod, "pytestmark", None)
+        if mod_marks is not None:
+            if not isinstance(mod_marks, (list, tuple)):
+                mod_marks = [mod_marks]
+            for m in mod_marks:
+                if hasattr(m, "name") and hasattr(m, "args") and hasattr(m, "kwargs"):
+                    marks.append((m.name, m.args, m.kwargs))
         # Separate parametrize marks from other marks
         parametrize_marks = []
         for mark_name, mark_args, mark_kwargs in marks:
@@ -1620,7 +1631,7 @@ def _expand_parametrize(tests: list) -> list:
             for i, val in enumerate(argvalues_iter):
                 if isinstance(val, dict) and "values" in val:
                     values = val["values"]
-                elif isinstance(val, (list, tuple)):
+                elif isinstance(val, (list, tuple)) and len(val) == len(argnames):
                     values = list(val)
                 else:
                     values = [val]
@@ -1675,7 +1686,7 @@ def _expand_parametrize(tests: list) -> list:
             elif len(values) == 1 and len(argnames) == 1:
                 val_str = str(values[0])
                 if len(val_str) > 80 or not val_str.isidentifier():
-                    val_str = str(argnames[0])
+                    val_str = f"{argnames[0]}{idx}"
                 test_clone.name = f"{test.name}[{val_str}]"
             else:
                 # Use short ids for complex parametrize combos
