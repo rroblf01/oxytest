@@ -49,6 +49,8 @@ class FixtureManager:
         self.register_builtin("capsys", self._fixture_capsys, scope="function")
         self.register_builtin("capfd", self._fixture_capfd, scope="function")
         self.register_builtin("monkeypatch", self._fixture_monkeypatch, scope="function")
+        self.register_builtin("mocker", self._fixture_mocker, scope="function")
+        self.register_builtin("benchmark", self._fixture_benchmark, scope="function")
 
     def register_builtin(self, name: str, func: Callable, scope: str = "function"):
         self._fixtures[name] = FixtureDef(func, scope=scope, name=name)
@@ -71,6 +73,33 @@ class FixtureManager:
             obj = getattr(module, attr_name)
             if hasattr(obj, "_oxytest_fixture"):
                 self.register(obj)
+            # Detect fixtures from real pytest plugins (e.g. pytest_mock, pytest_examples)
+            elif hasattr(obj, "__wrapped__") and hasattr(obj, "name"):
+                wrapped = obj.__wrapped__
+                if callable(wrapped) and not hasattr(wrapped, "_oxytest_fixture"):
+                    # Skip fixtures from modules that rely on internal pytest APIs
+                    mod = getattr(wrapped, "__module__", "")
+                    if mod.startswith(("pytest_benchmark", "pytest_codspeed")):
+                        continue
+                    # Skip fixtures with parameters that can't be resolved
+                    import inspect as _inspect
+                    try:
+                        _sig = _inspect.signature(wrapped)
+                        has_internal = any(
+                            p.name.startswith("_") and p.default is p.empty
+                            for p in _sig.parameters.values()
+                        )
+                        if has_internal:
+                            continue
+                    except Exception:
+                        pass
+                    wrapped._oxytest_fixture = {
+                        "scope": "function",
+                        "params": None,
+                        "autouse": False,
+                        "name": attr_name,
+                    }
+                    self.register(wrapped)
 
     def resolve(self, name: str, scope: str = "function", _resolving: set = None) -> Any:
         if _resolving is None:
@@ -231,6 +260,52 @@ class FixtureManager:
 
     def _fixture_monkeypatch(self):
         return MonkeyPatch()
+
+    def _fixture_mocker(self):
+        m = MockerFixture()
+        yield m
+        m.stopall()
+
+    def _fixture_benchmark(self):
+        class _BenchmarkStub:
+            def __call__(self, fn, *args, **kwargs):
+                return fn(*args, **kwargs)
+        return _BenchmarkStub()
+
+
+class MockerFixture:
+    """Simplified mock fixture compatible with pytest-mock's mocker fixture."""
+
+    def __init__(self):
+        import unittest.mock as _mock
+        self._mock = _mock
+        self._patches = []
+
+    def patch(self, target, *args, **kwargs):
+        p = self._mock.patch(target, *args, **kwargs)
+        self._patches.append(p)
+        return p.start()
+
+    def stopall(self):
+        for p in self._patches:
+            p.stop()
+        self._patches.clear()
+
+    def spy(self, obj, name):
+        import unittest.mock as _mock
+        orig = getattr(obj, name)
+        def _spy(*args, **kwargs):
+            _spy.spy_return = None
+            _spy.spy_exception = None
+            try:
+                r = orig(*args, **kwargs)
+                _spy.spy_return = r
+                return r
+            except Exception as e:
+                _spy.spy_exception = e
+                raise
+        setattr(obj, name, _spy)
+        return _spy
 
 
 class _CaptureFixture:

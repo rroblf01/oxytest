@@ -274,16 +274,17 @@ class MarkDecorator:
         self.args = args
         self.kwargs = kwargs or {}
 
-    def __call__(self, func=None, *extra_args, **extra_kwargs):
-        if func is None:
-            # Called as mark.foo()() → create a deeper mark
-            new_kwargs = dict(self.kwargs)
-            new_kwargs.update(extra_kwargs)
-            return MarkDecorator(self.name, self.args + extra_args, new_kwargs)
-        if not hasattr(func, "_oxytest_marks"):
-            func._oxytest_marks = []
-        func._oxytest_marks.append((self.name, self.args, self.kwargs))
-        return func
+    def __call__(self, *args, **kwargs):
+        if args and callable(args[0]) and not kwargs:
+            func = args[0]
+            if not hasattr(func, "_oxytest_marks"):
+                func._oxytest_marks = []
+            func._oxytest_marks.append((self.name, self.args, self.kwargs))
+            return func
+        new_args = self.args + args
+        new_kwargs = dict(self.kwargs)
+        new_kwargs.update(kwargs)
+        return MarkDecorator(self.name, new_args, new_kwargs)
 
 
 class Mark:
@@ -586,6 +587,15 @@ class Parser:
         return result
 
 
+class _TraceStub:
+    class _Root:
+        def get(self, name):
+            return _TraceStub()
+    root = _Root()
+    def __call__(self, *args, **kwargs):
+        pass
+
+
 class Config:
     """Holds parsed CLI options and plugin state."""
 
@@ -596,6 +606,8 @@ class Config:
         self._inicfg: dict = {}
         self.rootdir = opts.get("rootdir", None)
         self._stash_data: dict = {}
+        self._benchmarksession = None
+        self.trace = _TraceStub()
 
     def getoption(self, name: str, default=None):
         return self._opts.get(name, default)
@@ -622,6 +634,18 @@ class _ConfigStash:
         self._data = data
 
     def __getitem__(self, key):
+        if key not in self._data:
+            # Auto-populate assertstate_key for _pytest assertion rewrite
+            try:
+                from _pytest.assertion.rewrite import assertstate_key
+                if key is assertstate_key:
+                    from _pytest.assertion import AssertionState
+                    value = AssertionState(object(), "rewrite")
+                    self._data[key] = value
+                    return value
+            except Exception:
+                pass
+            self._data[key] = {}
         return self._data[key]
 
     def __setitem__(self, key, value):
@@ -631,7 +655,26 @@ class _ConfigStash:
         return key in self._data
 
     def get(self, key, default=None):
-        return self._data.get(key, default)
+        if key in self._data:
+            return self._data[key]
+        self._data[key] = {}
+        return self._data[key]
+
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def get(self, key, default=None):
+        if key in self._data:
+            return self._data[key]
+        if "assertstate" in str(key).lower() or "assertion" in str(key).lower():
+            from _pytest.assertion import AssertionState
+            self._data[key] = AssertionState({}, False, False)
+        else:
+            self._data[key] = {}
+        return self._data[key]
 
 
 def _parse_args(args: List[str]) -> dict:
@@ -797,6 +840,10 @@ def _run_tests(
             tests = [t for t in tests if not _is_ignored(t.path, ignore)]
         all_tests.extend(tests)
         _load_conftest(path, config=config)
+        # Also load conftest from root test dir (handles subdir conftests)
+        for _test in tests:
+            _tdir = os.path.dirname(os.path.abspath(_test.path))
+            _load_conftest(_tdir, config=config)
 
     if not all_tests:
         if not collect_only:
@@ -1237,8 +1284,17 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
     fm = get_fixture_manager()
     pm = get_plugin_manager()
 
+    # Pre-populate stash with assertstate_key for AssertionRewritingHook
+    if config is not None:
+        try:
+            from _pytest.assertion.rewrite import assertstate_key
+            from _pytest.assertion import AssertionState
+            config._stash_data[assertstate_key] = AssertionState(config, "rewrite")
+        except Exception:
+            pass
+
     dirpath = os.path.abspath(root_dir) if os.path.isdir(root_dir) else os.path.dirname(os.path.abspath(root_dir))
-    seen = set()
+    seen = _conftest_seen
     while dirpath != "/" and dirpath not in seen:
         seen.add(dirpath)
         conftest_path = os.path.join(dirpath, "conftest.py")
@@ -1260,11 +1316,13 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
 
 _module_cache: dict = {}
 _parametrize_cache: dict = {}
+_conftest_seen: set = set()
 
 
 def _module_cache_clear():
     _module_cache.clear()
     _parametrize_cache.clear()
+    _conftest_seen.clear()
 
 
 def _execute_test(path: str, name: str, args_json: str):
@@ -1311,6 +1369,9 @@ def _execute_test(path: str, name: str, args_json: str):
         parts = clean_name.split("::")
         cls = getattr(mod, parts[0])
         instance = cls()
+        # Support setUp/tearDown from unittest.TestCase
+        if hasattr(instance, "setUp"):
+            instance.setUp()
         func = getattr(instance, parts[1])
     else:
         func = getattr(mod, clean_name)
@@ -1364,7 +1425,18 @@ def _execute_test(path: str, name: str, args_json: str):
     # Resolve fixtures for remaining parameters (in order)
     for pname in fixture_params:
         try:
-            val = fm.resolve(pname)
+            if pname == "request":
+                from oxytest._compat import FixtureRequest as _FR
+                from oxytest._compat import Config as _OxyConfig
+                req = _FR(_test_func=func)
+                req._oxytest_config = getattr(fm, '_config', None) or _OxyConfig({})
+                if isinstance(getattr(fm, '_current_request_param', None), dict):
+                    req.param = fm._current_request_param.get("request")
+                else:
+                    req.param = getattr(fm, '_current_request_param', None)
+                val = req
+            else:
+                val = fm.resolve(pname)
             # Find the position of this fixture in param_values and fill it
             if pname in all_params:
                 idx = all_params.index(pname)
@@ -1452,6 +1524,11 @@ def _execute_test(path: str, name: str, args_json: str):
     finally:
         fm.cleanup()
         fm._current_request_param = None
+        if cls is not None and hasattr(instance, "tearDown"):
+            try:
+                instance.tearDown()
+            except Exception:
+                pass
 
 
 def _expand_parametrize(tests: list) -> list:
@@ -1473,8 +1550,10 @@ def _expand_parametrize(tests: list) -> list:
                 rel_path = _os.path.relpath(filepath)
                 module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
                 dirpath = _os.path.dirname(_os.path.abspath(filepath))
+                # Add to sys.path (at end, not start) to support relative imports
+                # while avoiding shadowing stdlib packages
                 if dirpath not in _sys.path:
-                    _sys.path.insert(0, dirpath)
+                    _sys.path.append(dirpath)
                 spec = importlib.util.spec_from_file_location(module_name, filepath)
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
@@ -1531,7 +1610,14 @@ def _expand_parametrize(tests: list) -> list:
                 argnames = list(argnames_str)
 
             value_sets = []
-            for i, val in enumerate(argvalues_list):
+            try:
+                argvalues_iter = list(argvalues_list) if not isinstance(argvalues_list, (list, tuple)) else argvalues_list
+            except Exception as exc:
+                import sys as _sys2
+                print(f"  [oxytest] Warning: could not expand parametrize for {test.name}: {exc}", file=_sys2.stderr)
+                expanded.append(test)
+                continue
+            for i, val in enumerate(argvalues_iter):
                 if isinstance(val, dict) and "values" in val:
                     values = val["values"]
                 elif isinstance(val, (list, tuple)):

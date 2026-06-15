@@ -109,6 +109,9 @@ class PluginManager:
             try:
                 plugin = ep.load()
                 self.register(plugin, name=ep.name)
+                # Also register any fixtures defined in the plugin module
+                from oxytest._fixtures import get_fixture_manager
+                get_fixture_manager().register_from_module(plugin)
             except Exception as exc:
                 print(f"oxytest: warning – could not load plugin {ep.name}: {exc}", file=sys.stderr)
 
