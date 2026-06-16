@@ -400,6 +400,19 @@ class MonkeyPatch:
         self._saved = []
 
     def setattr(self, target, name, value, raising=True):
+        # Support dotted string target like pytest: setattr("module.attr", value)
+        if isinstance(target, str):
+            parts = target.rsplit(".", 1)
+            if len(parts) == 2:
+                import importlib
+                mod_name, attr_name = parts
+                try:
+                    target = importlib.import_module(mod_name)
+                except ImportError:
+                    target = __import__(mod_name)
+                return self.setattr(target, attr_name, value, raising=raising)
+            name = target
+            target = __import__("builtins")
         try:
             old = getattr(target, name, _NOT_SET)
         except AttributeError:

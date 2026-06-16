@@ -4,7 +4,8 @@ use rayon::prelude::*;
 use std::path::Path;
 
 fn is_test_file(filename: &str) -> bool {
-    filename.starts_with("test_") || filename.ends_with("_test.py")
+    let name = filename.strip_suffix(".py").unwrap_or(filename);
+    name.starts_with("test") || name.ends_with("_test")
 }
 
 fn collect_class_methods(
@@ -21,7 +22,7 @@ fn collect_class_methods(
             .extract::<String>()?;
         if item_type == "FunctionDef" || item_type == "AsyncFunctionDef" {
             let method_name = item.getattr("name")?.extract::<String>()?;
-            if method_name.starts_with("test_") {
+            if method_name.starts_with("test") {
                 let lineno = item.getattr("lineno")?.extract::<u32>()?;
                     tests.push(TestItem {
                         path: filepath.to_string(),
@@ -59,7 +60,7 @@ fn discover_tests_in_file(py: Python<'_>, filepath: &str) -> PyResult<Vec<TestIt
         match node_type.as_str() {
             "FunctionDef" | "AsyncFunctionDef" => {
                 let name = node.getattr("name")?.extract::<String>()?;
-                if name.starts_with("test_") {
+                if name.starts_with("test") {
                     let lineno = node.getattr("lineno")?.extract::<u32>()?;
                     tests.push(TestItem {
                         path: filepath.to_string(),

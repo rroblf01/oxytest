@@ -277,7 +277,7 @@ class PytestDeprecationWarning(FutureWarning):
     """Warning for deprecated pytest features."""
 
 
-def skip(reason: str = "") -> None:
+def skip(reason: str = "", **kwargs) -> None:
     raise SkipTest(reason)
 
 
@@ -2068,43 +2068,57 @@ def _expand_parametrize(tests: list) -> list:
             expanded.append(test_clone)
 
     # Phase 2: Expand parametrized fixtures
-    # After parametrize expansion, check if any test uses a fixture with params
-    from oxytest._fixtures import get_fixture_manager as _get_fm
-    _fm = _get_fm()
-    _param_fixtures = {n: fdef.params for n, fdef in _fm._fixtures.items() if fdef.params}
-    if _param_fixtures:
-        _extra_expanded = []
-        for test in expanded:
-            filepath = os.path.abspath(test.path)
-            mod = _module_cache.get(filepath)
-            if mod is None:
-                _extra_expanded.append(test)
+    # Scan each test's module for fixtures with params= in their _oxytest_fixture metadata
+    _extra_expanded = []
+    for test in expanded:
+        filepath = os.path.abspath(test.path)
+        mod = _module_cache.get(filepath)
+        if mod is None:
+            _extra_expanded.append(test)
+            continue
+        # Get the test function
+        func = None
+        if "::" in test.name:
+            parts = test.name.split("::")
+            cls = getattr(mod, parts[0], None)
+            if cls and len(parts) > 1:
+                func = getattr(cls, parts[1], None)
+        else:
+            clean_name = test.name.split("[")[0] if "[" in test.name else test.name
+            func = getattr(mod, clean_name, None)
+        if func is None:
+            _extra_expanded.append(test)
+            continue
+        # Find parametrized fixtures in the module by scanning its attributes
+        _param_fixtures = {}
+        for attr_name in dir(mod):
+            obj = getattr(mod, attr_name, None)
+            if obj is None:
                 continue
-            # Get the test function
-            func = None
-            if "::" in test.name:
-                parts = test.name.split("::")
-                cls = getattr(mod, parts[0], None)
-                if cls and len(parts) > 1:
-                    func = getattr(cls, parts[1], None)
-            else:
-                clean_name = test.name.split("[")[0] if "[" in test.name else test.name
-                func = getattr(mod, clean_name, None)
-            if func is None:
-                _extra_expanded.append(test)
-                continue
-            # Check if any parameter matches a parametrized fixture
-            import inspect as _inspect
-            sig = _inspect.signature(func)
-            matching_fixtures = {}
-            for pname in sig.parameters.keys():
-                if pname in _param_fixtures:
-                    matching_fixtures[pname] = _param_fixtures[pname]
-            if not matching_fixtures:
-                _extra_expanded.append(test)
-                continue
+            meta = getattr(obj, "_oxytest_fixture", None)
+            if meta and isinstance(meta, dict) and meta.get("params"):
+                _param_fixtures[meta["name"]] = meta["params"]
+        # Also check builtins registered in the fixture manager
+        from oxytest._fixtures import get_fixture_manager as _get_fm
+        _fm = _get_fm()
+        for n, fdef in _fm._fixtures.items():
+            if fdef.params and n not in _param_fixtures:
+                _param_fixtures[n] = fdef.params
+        if not _param_fixtures:
+            _extra_expanded.append(test)
+            continue
+        # Check if any parameter matches a parametrized fixture
+        import inspect as _inspect
+        sig = _inspect.signature(func)
+        matching_fixtures = {}
+        for pname in sig.parameters.keys():
+            if pname in _param_fixtures:
+                matching_fixtures[pname] = _param_fixtures[pname]
+        if not matching_fixtures:
+            _extra_expanded.append(test)
+            continue
 
-            # Get existing cache entry (argnames, values) or empty
+        # Get existing cache entry (argnames, values) or empty
             cache_key = (filepath, test.name)
             existing_argnames = []
             existing_values = []
@@ -2118,13 +2132,20 @@ def _expand_parametrize(tests: list) -> list:
             # Create clones for each fixture param combination
             import itertools as _itertools
             _fixture_items = sorted(matching_fixtures.items())
-            _param_combos = list(_itertools.product(*(v for _, v in _fixture_items)))
+            _param_lists = [v for _, v in _fixture_items]
+            _param_combos = list(_itertools.product(*_param_lists))
             for _idx, _combo in enumerate(_param_combos):
                 _new_values = list(existing_values)
                 _new_argnames = list(existing_argnames)
                 _fixture_params = {}
                 _id_parts = []
                 for (_fname, _), _pval in zip(_fixture_items, _combo):
+                    # Unwrap pytest.param() dicts to get the actual value
+                    if isinstance(_pval, dict) and "values" in _pval:
+                        _actual = _pval["values"]
+                        if isinstance(_actual, (list, tuple)) and len(_actual) == 1:
+                            _actual = _actual[0]
+                        _pval = _actual
                     _fixture_params[_fname] = _pval
                     _id_parts.append(str(_pval))
                 name_suffix = "-".join(_id_parts)
