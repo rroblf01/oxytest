@@ -143,7 +143,7 @@ def hookspec(tryfirst=False, trylast=False, hookwrapper=False):
     """
     if callable(tryfirst):
         return _hook_spec(tryfirst)
-    return _hook_spec(tryfirst=tryfirst, trylast=trylast,
+    return _hook_spec(tryfirst=tryfirst, trylast=trylast,  # ty: ignore
                       hookwrapper=hookwrapper)
 
 

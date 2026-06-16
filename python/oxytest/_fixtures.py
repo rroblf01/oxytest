@@ -6,7 +6,7 @@ import pathlib
 import shutil
 import inspect
 import asyncio
-from typing import Any, Callable, Dict, Generator, Optional
+from typing import Any, Callable, Dict, Generator, Optional, cast
 
 
 class FixtureDef:
@@ -59,7 +59,7 @@ class FixtureManager:
 
     def register(self, func: Callable):
         if hasattr(func, "_oxytest_fixture"):
-            meta: dict[str, Any] = func._oxytest_fixture
+            meta: dict[str, Any] = cast("dict[str, Any]", func._oxytest_fixture)
             self._fixtures[meta["name"]] = FixtureDef(
                 func,
                 scope=meta["scope"],
@@ -179,7 +179,7 @@ class FixtureManager:
             value = yielded
 
         if hasattr(value, "start") and callable(value.start):
-            value.start()
+            value.start()  # ty: ignore
 
         if fdef.scope in ("session", "module", "class"):
             self._cache[name] = value
@@ -327,18 +327,20 @@ class MockerFixture:
 
     def spy(self, obj, name):
         orig = getattr(obj, name)
-        def _spy(*args, **kwargs):
-            _spy.spy_return = None
-            _spy.spy_exception = None
-            try:
-                r = orig(*args, **kwargs)
-                _spy.spy_return = r
-                return r
-            except Exception as e:
-                _spy.spy_exception = e
-                raise
-        setattr(obj, name, _spy)
-        return _spy
+        class _Spy:
+            spy_return: Any = None
+            spy_exception: Any = None
+            def __call__(self, *args, **kwargs):
+                try:
+                    r = orig(*args, **kwargs)
+                    self.spy_return = r
+                    return r
+                except Exception as e:
+                    self.spy_exception = e
+                    raise
+        spy = _Spy()
+        setattr(obj, name, spy)
+        return spy
 
 
 class _CaptureFixture:

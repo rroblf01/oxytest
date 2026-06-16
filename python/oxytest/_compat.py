@@ -155,14 +155,16 @@ def raises(
     *args,
     match: Optional[str] = None,
     check: Optional[Callable] = None,
-) -> Optional[Union[RaisesContext, ContextManager]]:
+) -> Union[RaisesContext, ContextManager]:
     if args:
         func = args[0]
         try:
             func(*args[1:])
         except expected_exception:
-            return None
-        raise Failed(f"DID NOT RAISE {expected_exception}")
+            pass
+        else:
+            raise Failed(f"DID NOT RAISE {expected_exception}")
+        return RaisesContext(expected_exception)
     ctx = RaisesContext(expected_exception, match=match)
     ctx._check = check
     return ctx
@@ -432,7 +434,7 @@ def fixture(
     ids: Optional[list] = None,
 ):
     if callable(scope):
-        func: Callable[..., Any] = scope
+        func: Any = scope
         func._oxytest_fixture = {
             "scope": "function",
             "params": None,
@@ -440,7 +442,7 @@ def fixture(
             "name": getattr(func, "__name__", str(func)),
         }
         return func
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(func: Any) -> Callable[..., Any]:
         func._oxytest_fixture = {
             "scope": scope,
             "params": params,
@@ -729,7 +731,7 @@ class _ConfigStash:
                                 def get(self, name: str) -> None: return None
                             root = _Root()
                         trace = _Trace()
-                    value = AssertionState(_FakeConfig(), "rewrite")
+                    value = AssertionState(_FakeConfig(), "rewrite")  # ty: ignore
                     self._data[key] = value
                     return value
             except Exception:
@@ -755,7 +757,7 @@ class _ConfigStash:
                             def get(self, name: str) -> None: return None
                         root = _Root()
                     trace = _Trace()
-                self._data[key] = AssertionState(_FakeConfig(), "rewrite")
+                self._data[key] = AssertionState(_FakeConfig(), "rewrite")  # ty: ignore
             except Exception:
                 self._data[key] = {}
         else:
@@ -763,8 +765,8 @@ class _ConfigStash:
         return self._data[key]
 
 
-def _parse_args(args: List[str]) -> dict[str, object]:
-    parsed = {
+def _parse_args(args: List[str]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {
         "paths": [],
         "verbose": False,
         "quiet": False,
@@ -1377,7 +1379,7 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
         try:
             from _pytest.assertion.rewrite import assertstate_key
             from _pytest.assertion import AssertionState
-            config._stash_data[assertstate_key] = AssertionState(config, "rewrite")
+            config._stash_data[assertstate_key] = AssertionState(config, "rewrite")  # ty: ignore
         except Exception:
             pass
 
@@ -1549,8 +1551,9 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 from oxytest._compat import Config as _OxyConfig
                 req = _FR(_test_func=func)
                 req._oxytest_config = getattr(fm, '_config', None) or _OxyConfig({})
-                if isinstance(getattr(fm, '_current_request_param', None), dict):
-                    req.param = fm._current_request_param.get("request")
+                current_param = getattr(fm, '_current_request_param', None)
+                if isinstance(current_param, dict):
+                    req.param = current_param.get("request")
                 else:
                     req.param = getattr(fm, '_current_request_param', None)
                 val = req
