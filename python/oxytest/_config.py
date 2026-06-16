@@ -1,4 +1,5 @@
 import os
+import importlib
 
 
 def load_config(path=None):
@@ -6,13 +7,15 @@ def load_config(path=None):
         path = _find_pyproject_toml()
     if path is None or not os.path.isfile(path):
         return {}
-    try:
-        import tomllib
-    except ImportError:
+    tomllib = None
+    for mod_name in ("tomllib", "tomli"):
         try:
-            import tomli as tomllib  # ty: ignore
+            tomllib = importlib.import_module(mod_name)
+            break
         except ImportError:
-            return {}
+            continue
+    if tomllib is None:
+        return {}
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)

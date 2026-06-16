@@ -191,4 +191,22 @@ mod tests {
         assert_eq!(item.name, "test_hello");
         assert_eq!(item.line_no, 10);
     }
+
+    #[test]
+    fn test_is_test_file_both_prefix_and_suffix() {
+        assert!(is_test_file("test_foo_test.py"));
+        assert!(is_test_file("test_bar_final_test.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_uppercase() {
+        assert!(!is_test_file("Test_foo.py"));
+        assert!(!is_test_file("foo_Test.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_no_ext() {
+        assert!(!is_test_file("test"));        // no underscore prefix/suffix
+        assert!(!is_test_file("_test.pyx"));   // wrong extension
+    }
 }

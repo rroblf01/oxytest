@@ -1,9 +1,14 @@
 import sys
+import typing
+
 
 try:
-    import coverage  # ty: ignore
+    import coverage
 except ImportError:
-    coverage = None
+    if typing.TYPE_CHECKING:
+        coverage = typing.cast(typing.Any, None)
+    else:
+        coverage = None
 
 
 _COV_SOURCE = None

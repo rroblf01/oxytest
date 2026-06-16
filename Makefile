@@ -62,8 +62,7 @@ ruff-fix:
 ty-check:
 	$(TY) check python/oxytest/
 
-lint: ruff-check
-	$(TY) check python/oxytest/ || true
+lint: ruff-check ty-check
 
 # ── Housekeeping ────────────────────────────────────────────────────
 
