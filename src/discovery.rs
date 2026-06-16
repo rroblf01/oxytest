@@ -1,7 +1,7 @@
 use crate::types::TestItem;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::path::Path;
-use std::sync::Mutex;
 
 fn is_test_file(filename: &str) -> bool {
     filename.starts_with("test_") || filename.ends_with("_test.py")
@@ -86,15 +86,15 @@ fn discover_tests_in_file(py: Python<'_>, filepath: &str) -> PyResult<Vec<TestIt
 
 #[pyfunction]
 #[pyo3(signature = (root_dir, pattern=None))]
-pub fn discover_tests(_py: Python<'_>, root_dir: &str, pattern: Option<&str>) -> PyResult<Vec<TestItem>> {
+pub fn discover_tests(py: Python<'_>, root_dir: &str, pattern: Option<&str>) -> PyResult<Vec<TestItem>> {
     let root = Path::new(root_dir);
     if !root.exists() {
         return Ok(Vec::new());
     }
 
-    let all_tests = Mutex::new(Vec::new());
+    let pattern = pattern.map(|p| p.to_lowercase());
 
-    let walker = walkdir::WalkDir::new(root)
+    let test_files: Vec<String> = walkdir::WalkDir::new(root)
         .follow_links(true)
         .into_iter()
         .filter_entry(|e| {
@@ -108,37 +108,87 @@ pub fn discover_tests(_py: Python<'_>, root_dir: &str, pattern: Option<&str>) ->
                 && name != "node_modules"
                 && name != "target"
                 && name != "site"
-        });
-
-    let entries: Vec<_> = walker
+        })
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "py"))
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy();
+            is_test_file(&name)
+        })
         .map(|e| e.path().to_string_lossy().to_string())
         .collect();
 
-    let pattern = pattern.map(|p| p.to_lowercase());
+    let all_tests: Vec<TestItem> = py.detach(|| {
+        test_files
+            .par_iter()
+            .map(|filepath| {
+                Python::try_attach(|py| {
+                    discover_tests_in_file(py, filepath).ok()
+                })
+            })
+            .filter_map(|result| result.flatten())
+            .flatten()
+            .collect()
+    });
 
-    for filepath in &entries {
-        if !filepath.ends_with(".py") {
-            continue;
-        }
-        let filename = Path::new(filepath)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        if !is_test_file(&filename) {
-            continue;
-        }
-        if let Ok(tests) = discover_tests_in_file(_py, filepath) {
-            all_tests.lock().unwrap().extend(tests);
-        }
-    }
-
-    let mut result = all_tests.into_inner().unwrap();
+    let mut result = all_tests;
     if let Some(ref pat) = pattern {
         result.retain(|t| t.name.to_lowercase().contains(pat) || t.path.to_lowercase().contains(pat));
     }
     result.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line_no.cmp(&b.line_no)));
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_test_file_prefix() {
+        assert!(is_test_file("test_foo.py"));
+        assert!(is_test_file("test_bar.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_suffix() {
+        assert!(is_test_file("foo_test.py"));
+        assert!(is_test_file("bar_test.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_negative() {
+        assert!(!is_test_file("regular.py"));
+        assert!(!is_test_file("test.txt"));
+        assert!(!is_test_file("setup.py"));
+        assert!(!is_test_file("conftest.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_edge_cases() {
+        assert!(is_test_file("test_.py"));
+        assert!(is_test_file("_test.py"));
+        assert!(!is_test_file(""));
+        assert!(!is_test_file(".py"));
+    }
+
+    #[test]
+    fn test_is_test_file_path_with_dir() {
+        // is_test_file receives only the basename, not the full path
+        assert!(is_test_file("test_foo.py"));
+        assert!(is_test_file("bar_test.py"));
+        assert!(!is_test_file("helper.py"));
+    }
+
+    #[test]
+    fn test_test_item_new_no_args() {
+        let item = TestItem::new_no_args(
+            "/path/test.py".into(),
+            "test_hello".into(),
+            10,
+        );
+        assert_eq!(item.path, "/path/test.py");
+        assert_eq!(item.name, "test_hello");
+        assert_eq!(item.line_no, 10);
+    }
 }
