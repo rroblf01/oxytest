@@ -146,3 +146,76 @@ def test_test_item_repr():
 def test_exit_via_main():
     result = pytest.main(["-v", os.path.join(os.path.dirname(__file__), "sample_tests")])
     assert isinstance(result, int)
+
+
+def test_raises_with_callable():
+    pytest.raises(ValueError, int, "not_a_number")
+
+
+def test_raises_with_callable_no_exception():
+    try:
+        pytest.raises(ValueError, int, "42")
+        assert False, "Should have raised Failed"
+    except pytest.Failed:
+        pass
+
+
+def test_raises_with_callable_wrong_exception():
+    try:
+        pytest.raises(TypeError, int, "not_a_number")
+        assert False, "Should have propagated ValueError"
+    except ValueError:
+        pass
+
+
+def test_warns_basic():
+    with pytest.warns(UserWarning):
+        import warnings
+        warnings.warn("test warning", UserWarning)
+
+
+def test_warns_match():
+    with pytest.warns(UserWarning, match="specific"):
+        import warnings
+        warnings.warn("specific warning", UserWarning)
+
+
+def test_warns_no_warning():
+    try:
+        with pytest.warns(UserWarning):
+            pass
+        assert False, "Should have raised Failed"
+    except pytest.Failed:
+        pass
+
+
+def test_warns_nested():
+    import warnings
+    with pytest.warns(UserWarning, match="outer"):
+        with pytest.warns(UserWarning, match="inner"):
+            warnings.warn("inner message", UserWarning)
+            warnings.warn("outer message", UserWarning)
+
+
+def test_warns_nested_both_nonexistent():
+    """Nested warns — both inner and outer fail, inner's Failed propagates."""
+    import warnings
+    try:
+        with pytest.warns(UserWarning, match="nonexistent"):
+            with pytest.warns(UserWarning, match="also_not_there"):
+                warnings.warn("some message", UserWarning)
+        assert False, "Should have raised Failed"
+    except pytest.Failed:
+        pass
+
+
+def test_deprecated_call():
+    import warnings
+    with pytest.deprecated_call():
+        warnings.warn("deprecated", DeprecationWarning)
+
+
+def test_deprecated_call_pending():
+    import warnings
+    with pytest.deprecated_call():
+        warnings.warn("pending deprecated", PendingDeprecationWarning)
