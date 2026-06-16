@@ -62,9 +62,21 @@ class _AssertRewriter(ast.NodeTransformer):
 
     def _collect_details(self, node, details):
         if isinstance(node, ast.Compare):
-            for expr in [node.left] + node.ops:
+            for expr in [node.left] + node.comparators:
                 if isinstance(expr, ast.expr):
                     details.append(expr)
+        elif isinstance(node, ast.Call):
+            details.append(node)
+        elif isinstance(node, ast.BoolOp):
+            for val in node.values:
+                self._collect_details(val, details)
+        elif isinstance(node, ast.UnaryOp):
+            self._collect_details(node.operand, details)
+        elif isinstance(node, ast.BinOp):
+            details.append(node.left)
+            details.append(node.right)
+        elif isinstance(node, ast.Name) or isinstance(node, ast.Constant):
+            details.append(node)
 
 
 def _rewrite_module(source, filename):

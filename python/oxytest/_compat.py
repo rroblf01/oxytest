@@ -18,6 +18,7 @@ from typing import (
 )
 
 from oxytest._core import discover_tests, run_tests, run_tests_sequential, TestItem, TestResult
+from oxytest._config import load_config, merge_config_with_opts
 
 
 Exit = SystemExit
@@ -758,11 +759,10 @@ class _ConfigStash:
                         root = _Root()
                     trace = _Trace()
                 self._data[key] = AssertionState(_FakeConfig(), "rewrite")  # ty: ignore
+                return self._data[key]
             except Exception:
-                self._data[key] = {}
-        else:
-            self._data[key] = {}
-        return self._data[key]
+                pass
+        return default
 
 
 def _parse_args(args: List[str]) -> dict[str, Any]:
@@ -792,6 +792,14 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
     "cache_clear": False,
     "lf": False,
     "ff": False,
+    "pdb": False,
+    "trace": False,
+    "cov_source": None,
+    "cov_report": "term",
+    "cov_config": None,
+    "cov_branch": False,
+    "cov_fail_under": None,
+    "cov_append": False,
     }
 
     i = 0
@@ -860,6 +868,32 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
             parsed["ff"] = True
         elif arg == "--cache-clear":
             parsed["cache_clear"] = True
+        elif arg == "--pdb":
+            parsed["pdb"] = True
+        elif arg == "--trace":
+            parsed["trace"] = True
+            parsed["pdb"] = True
+        elif arg == "--cov":
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                parsed["cov_source"] = args[i]
+            else:
+                parsed["cov_source"] = True
+        elif arg.startswith("--cov="):
+            parsed["cov_source"] = arg[6:]
+        elif arg == "--cov-report" and i + 1 < len(args):
+            i += 1
+            parsed["cov_report"] = args[i]
+        elif arg == "--cov-config" and i + 1 < len(args):
+            i += 1
+            parsed["cov_config"] = args[i]
+        elif arg == "--cov-branch":
+            parsed["cov_branch"] = True
+        elif arg == "--cov-fail-under" and i + 1 < len(args):
+            i += 1
+            parsed["cov_fail_under"] = float(args[i])
+        elif arg == "--cov-append":
+            parsed["cov_append"] = True
         elif arg in ("-h", "--help"):
             parsed["help"] = True
         elif arg.startswith("-"):
@@ -872,6 +906,111 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         parsed["paths"] = ["."]
 
     return parsed
+
+
+def _parse_keyword_expression(expr: str):
+    tokens = []
+    i = 0
+    while i < len(expr):
+        c = expr[i]
+        if c.isspace():
+            i += 1
+        elif c in ("(", ")"):
+            tokens.append(c)
+            i += 1
+        else:
+            j = i
+            while j < len(expr) and not expr[j].isspace() and expr[j] not in "()":
+                j += 1
+            token = expr[i:j].lower()
+            if token in ("and", "or", "not"):
+                tokens.append(token.upper())
+            else:
+                tokens.append(token)
+            i = j
+    return tokens
+
+
+def _eval_keyword_expression(tokens, test_name, markers):
+    if not tokens:
+        return True
+    idx = [0]
+
+    def parse_expr():
+        result = parse_term()
+        while idx[0] < len(tokens) and tokens[idx[0]] == "OR":
+            idx[0] += 1
+            right = parse_term()
+            result = result or right
+        return result
+
+    def parse_term():
+        result = parse_factor()
+        while idx[0] < len(tokens) and tokens[idx[0]] == "AND":
+            idx[0] += 1
+            right = parse_factor()
+            result = result and right
+        return result
+
+    def parse_factor():
+        if idx[0] < len(tokens) and tokens[idx[0]] == "NOT":
+            idx[0] += 1
+            return not parse_factor()
+        if idx[0] < len(tokens) and tokens[idx[0]] == "(":
+            idx[0] += 1
+            result = parse_expr()
+            if idx[0] < len(tokens) and tokens[idx[0]] == ")":
+                idx[0] += 1
+            return result
+        if idx[0] < len(tokens):
+            word = tokens[idx[0]]
+            idx[0] += 1
+            return _match_keyword(word, test_name, markers)
+        return True
+
+    return parse_expr()
+
+
+def _match_keyword(word, test_name, markers):
+    if word.startswith('"') and word.endswith('"'):
+        word = word[1:-1]
+    lc_name = test_name.lower()
+    lc_word = word.lower()
+    if lc_word in lc_name:
+        return True
+    for m in markers:
+        if isinstance(m, str) and lc_word in m.lower():
+            return True
+        if hasattr(m, "name") and lc_word in m.name.lower():
+            return True
+    return False
+
+
+def _filter_keyword_expression(tests, expr):
+    tokens = _parse_keyword_expression(expr)
+    filtered = []
+    for t in tests:
+        markers = []
+        mod = None
+        if hasattr(t, "path") and t.path:
+            try:
+                mod = _get_test_module(t.path)
+            except Exception:
+                mod = None
+        if mod:
+            mod_marks = getattr(mod, "pytestmark", None)
+            if mod_marks:
+                if not isinstance(mod_marks, (list, tuple)):
+                    mod_marks = [mod_marks]
+                markers.extend(mod_marks)
+            func_name = t.name.split("[")[0].split("::")[-1] if "::" in t.name else t.name.split("[")[0]
+            func = getattr(mod, func_name, None)
+            if func and hasattr(func, "_oxytest_marks"):
+                for m_name, m_args, m_kwargs in func._oxytest_marks:
+                    markers.append(m_name)
+        if _eval_keyword_expression(tokens, t.path + "::" + t.name, markers):
+            filtered.append(t)
+    return filtered
 
 
 def _run_tests(
@@ -899,6 +1038,9 @@ def _run_tests(
     cache_clear: bool = False,
     lf: bool = False,
     ff: bool = False,
+    pdb: bool = False,
+    trace: bool = False,
+    cov_plugin=None,
 ) -> int:
     pm = None
     if config is not None:
@@ -923,17 +1065,21 @@ def _run_tests(
     if _cwd not in _sys.path:
         _sys.path.insert(0, _cwd)
 
+    has_expr = keyword and any(op in keyword.lower() for op in (" and ", " or ", " not "))
     all_tests = []
     for path in root_paths:
-        tests = discover_tests(path, keyword)
+        kw = None if has_expr else keyword
+        tests = discover_tests(path, kw)
         if ignore:
             tests = [t for t in tests if not _is_ignored(t.path, ignore)]
         all_tests.extend(tests)
         _load_conftest(path, config=config)
-        # Also load conftest from root test dir (handles subdir conftests)
         for _test in tests:
             _tdir = os.path.dirname(os.path.abspath(_test.path))
             _load_conftest(_tdir, config=config)
+
+    if has_expr:
+        all_tests = _filter_keyword_expression(all_tests, keyword)
 
     if not all_tests:
         if not collect_only:
@@ -976,12 +1122,18 @@ def _run_tests(
         print(f"After parametrize expansion: {len(all_tests)} test(s)")
         print()
 
+    if pdb:
+        os.environ["OXYTEST_PDB"] = "1"
+    if trace:
+        os.environ["OXYTEST_TRACE"] = "1"
+
+    if cov_plugin:
+        cov_plugin.start()
+
     if setup_show:
-        import os as _os
-        _os.environ["OXYTEST_SETUP_SHOW"] = "1"
+        os.environ["OXYTEST_SETUP_SHOW"] = "1"
     if showlocals:
-        import os as _os
-        _os.environ["OXYTEST_SHOWLOCALS"] = "1"
+        os.environ["OXYTEST_SHOWLOCALS"] = "1"
 
     # Cache support: --lf (last failed) and --ff (failed first)
     if lf or ff:
@@ -1002,10 +1154,16 @@ def _run_tests(
     else:
         results = run_tests(all_tests, num_workers, nocapture=nocapture)
 
+    if cov_plugin:
+        cov_plugin.stop_and_save()
+
     if setup_show:
-        _os.environ.pop("OXYTEST_SETUP_SHOW", None)
+        os.environ.pop("OXYTEST_SETUP_SHOW", None)
     if showlocals:
-        _os.environ.pop("OXYTEST_SHOWLOCALS", None)
+        os.environ.pop("OXYTEST_SHOWLOCALS", None)
+    if pdb or trace:
+        os.environ.pop("OXYTEST_PDB", None)
+        os.environ.pop("OXYTEST_TRACE", None)
 
     for result in results:
         reporter.test_result(result)
@@ -1241,28 +1399,29 @@ def _write_junitxml(reporter: TerminalReporter, path: str):
     system_out_lines: list[str] = []
     system_err_lines: list[str] = []
 
-    for result in reporter.failures:
+    for result in reporter.results:
         tc = ET.SubElement(suite, "testcase")
         tc.set("classname", result.test.path)
         tc.set("name", result.test.name)
         tc.set("time", f"{result.duration_ms / 1000:.3f}")
-        fail = ET.SubElement(tc, "failure")
-        fail.set("message", result.error or "Test failed")
-        if result.traceback:
-            fail.text = result.traceback
+        err = result.error or ""
+        if not result.passed and "SKIPPED:" in err:
+            ET.SubElement(tc, "skipped")
+        elif not result.passed and "XFAIL:" in err:
+            sk = ET.SubElement(tc, "skipped")
+            sk.set("type", "pytest.xfail")
+            sk.set("message", err.replace("XFAIL:", "").strip())
+        elif not result.passed:
+            fail = ET.SubElement(tc, "failure")
+            fail.set("message", err or "Test failed")
+            if result.traceback:
+                fail.text = result.traceback
         if result.output:
             system_out_lines.append(f"--- {result.test.path}::{result.test.name} ---")
             system_out_lines.append(result.output)
         if result.error_output:
             system_err_lines.append(f"--- {result.test.path}::{result.test.name} ---")
             system_err_lines.append(result.error_output)
-
-    for result in reporter.skipped:
-        tc = ET.SubElement(suite, "testcase")
-        tc.set("classname", result.test.path)
-        tc.set("name", result.test.name)
-        tc.set("time", f"{result.duration_ms / 1000:.3f}")
-        ET.SubElement(tc, "skipped")
 
     if system_out_lines:
         so = ET.SubElement(suite, "system-out")
@@ -1285,6 +1444,9 @@ def main(args: Optional[List[str]] = None) -> int:
         return migrate_main(args[1:])
 
     opts = _parse_args(args)
+
+    config_data = load_config()
+    opts = merge_config_with_opts(config_data, opts)
 
     if opts.get("version"):
         from oxytest import __version__
@@ -1318,6 +1480,14 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  --cache-clear       Clear cache before run")
         print("  --lf, --last-failed  Run only tests that failed last time")
         print("  --ff, --failed-first Run failed tests first, then rest")
+        print("  --pdb               Drop into debugger on failure")
+        print("  --trace             Drop into debugger before each test")
+        print("  --cov[=SOURCE]      Measure code coverage")
+        print("  --cov-report=TYPE   Coverage report type (term, html, xml)")
+        print("  --cov-config=FILE   Config file for coverage")
+        print("  --cov-branch        Enable branch coverage")
+        print("  --cov-fail-under=N  Fail if coverage below N%")
+        print("  --cov-append        Append to existing coverage data")
         print("  --version           Show version")
         print("  -h, --help          Show this help message")
         print()
@@ -1339,7 +1509,20 @@ def main(args: Optional[List[str]] = None) -> int:
     config.plugin_options = config.parser.parse(sys.argv[1:])
     pm.hook.pytest_configure(config=config)
 
-    return _run_tests(
+    cov_plugin = None
+    if opts.get("cov_source"):
+        from oxytest._cov import OxytestCoverPlugin, is_available
+        if is_available():
+            cov_plugin = OxytestCoverPlugin(
+                source=opts["cov_source"],
+                report=opts.get("cov_report", "term"),
+                config_file=opts.get("cov_config"),
+                branch=opts.get("cov_branch", False),
+                fail_under=opts.get("cov_fail_under"),
+                append=opts.get("cov_append", False),
+            )
+
+    exitcode = _run_tests(
         paths=opts["paths"],
         verbose=opts["verbose"],
         quiet=opts["quiet"],
@@ -1364,7 +1547,15 @@ def main(args: Optional[List[str]] = None) -> int:
         cache_clear=opts.get("cache_clear", False),
         lf=opts.get("lf", False),
         ff=opts.get("ff", False),
+        pdb=opts.get("pdb", False),
+        trace=opts.get("trace", False),
+        cov_plugin=cov_plugin,
     )
+
+    if cov_plugin:
+        cov_plugin.generate_reports()
+
+    return exitcode
 
 
 def _load_conftest(root_dir: str, config: Optional['Config'] = None):
@@ -1664,6 +1855,9 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     except SkipTest:
         raise Exception("SKIPPED:" + str(sys.exc_info()[1]))
     except AssertionError:
+        if os.environ.get("OXYTEST_PDB") == "1":
+            import pdb as _pdb
+            _pdb.post_mortem(sys.exc_info()[2])
         import traceback as _tb
         tb_list = _tb.extract_tb(sys.exc_info()[2])
 

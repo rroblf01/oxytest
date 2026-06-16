@@ -80,6 +80,10 @@ class FixtureManager:
                     wrapped = obj.__wrapped__
                 else:
                     continue
+                if hasattr(wrapped, "__func__"):
+                    wrapped = wrapped.__func__
+                else:
+                    continue
                 if not callable(wrapped) or hasattr(wrapped, "_oxytest_fixture"):
                     continue
                 mod = getattr(wrapped, "__module__", "")
@@ -253,7 +257,10 @@ class FixtureManager:
         return tmpdir
 
     def _fixture_capsys(self):
-        return _CaptureFixture()
+        cf = _CaptureFixture()
+        cf.start()
+        yield cf
+        cf.stop()
 
     def _fixture_capfd(self):
         return _CaptureFDFixture()
@@ -363,7 +370,15 @@ class _CaptureFixture:
 
     def readouterr(self):
         out = self._stringio.getvalue()
-        return out, ""
+        class _CaptureResult:
+            def __init__(self, out_val, err_val):
+                self.out = out_val
+                self.err = err_val
+            def __getitem__(self, i):
+                return (self.out, self.err)[i]
+            def __iter__(self):
+                return iter((self.out, self.err))
+        return _CaptureResult(out, "")
 
 
 class _CaptureFDFixture:
@@ -371,17 +386,13 @@ class _CaptureFDFixture:
         self._captured = None
 
     def start(self):
-        import faulthandler
         self._captured = io.StringIO()
-        faulthandler.enable(file=self._captured)
 
     def stop(self):
-        if self._captured:
-            import faulthandler
-            faulthandler.disable()
+        pass
 
     def readouterr(self):
-        return self._captured.getvalue() if self._captured else "", ""
+        return (self._captured.getvalue() if self._captured else ""), ""
 
 
 class MonkeyPatch:
@@ -389,23 +400,38 @@ class MonkeyPatch:
         self._saved = []
 
     def setattr(self, target, name, value, raising=True):
-        old = getattr(target, name, _NOT_SET)
-        self._saved.append((target, name, old))
-        setattr(target, name, value)
+        try:
+            old = getattr(target, name, _NOT_SET)
+        except AttributeError:
+            if raising:
+                raise
+            return
+        try:
+            setattr(target, name, value)
+        except (AttributeError, TypeError):
+            if raising:
+                raise
+            return
+        self._saved.append(("setattr", target, name, old))
 
     def delattr(self, target, name, raising=True):
-        old = getattr(target, name, _NOT_SET)
-        self._saved.append((target, name, old))
+        try:
+            old = getattr(target, name, _NOT_SET)
+        except AttributeError:
+            if raising:
+                raise
+            return
+        self._saved.append(("setattr", target, name, old))
         delattr(target, name)
 
     def setitem(self, mapping, key, value):
         old = mapping.get(key, _NOT_SET)
-        self._saved.append((mapping, key, old))
+        self._saved.append(("setitem", mapping, key, old))
         mapping[key] = value
 
     def delitem(self, mapping, key):
         old = mapping.get(key, _NOT_SET)
-        self._saved.append((mapping, key, old))
+        self._saved.append(("setitem", mapping, key, old))
         del mapping[key]
 
     def setenv(self, name, value, prepend=None):
@@ -444,19 +470,19 @@ class MonkeyPatch:
                 path = item[1]
                 if path in _sys.path:
                     _sys.path.remove(path)
-            elif len(item) == 3:
-                target, name, old = item
+            elif item[0] == "setattr":
+                _, target, name, old = item
                 if old is _NOT_SET:
                     if hasattr(target, name):
                         delattr(target, name)
                 else:
                     setattr(target, name, old)
-            else:
-                target, key, old = item
+            elif item[0] == "setitem":
+                _, mapping, key, old = item
                 if old is _NOT_SET:
-                    target.pop(key, None)
+                    mapping.pop(key, None)
                 else:
-                    target[key] = old
+                    mapping[key] = old
         self._saved.clear()
 
 

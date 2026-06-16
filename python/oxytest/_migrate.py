@@ -196,7 +196,7 @@ def migrate(
     else:
         print(f"Migration ({direction}): all {total} files already up to date")
 
-    if check and changed:
+    if changed:
         return 1
     return 0
 

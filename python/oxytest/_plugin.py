@@ -80,7 +80,10 @@ class PluginManager:
         return self._pm.hook
 
     def register(self, plugin: Any, name: str | None = None) -> str | None:
-        return self._pm.register(plugin, name=name)
+        result = self._pm.register(plugin, name=name)
+        if result:
+            self._plugins.append(result)
+        return result
 
     def unregister(self, plugin: Any) -> Any:
         return self._pm.unregister(plugin)
@@ -118,6 +121,10 @@ class PluginManager:
     def load_plugin_by_name(self, name: str):
         """Load a single plugin by module name (``-p PLUGIN``)."""
         try:
+            if name == "vscode_pytest":
+                import oxytest._vscode
+                self.register(oxytest._vscode, name="vscode_pytest")
+                return
             __import__(name)
             mod = sys.modules[name]
             self.register(mod, name=name)
@@ -143,8 +150,7 @@ def hookspec(tryfirst=False, trylast=False, hookwrapper=False):
     """
     if callable(tryfirst):
         return _hook_spec(tryfirst)
-    return _hook_spec(tryfirst=tryfirst, trylast=trylast,  # ty: ignore
-                      hookwrapper=hookwrapper)
+    return _hook_spec
 
 
 def hookimpl(tryfirst=False, trylast=False,
