@@ -9,7 +9,8 @@ COVERAGE := coverage
 
 .PHONY: all python-test rust-test test lint ty-check ruff-check clean help
 
-all: lint test
+all: lint
+	@$(MAKE) --no-print-directory test
 
 # ── Python ──────────────────────────────────────────────────────────
 
@@ -34,7 +35,8 @@ python-coverage-html:
 # ── Rust ────────────────────────────────────────────────────────────
 
 rust-test:
-	$(CARGO) test --lib
+	@printf "Rust tests: "
+	@$(CARGO) test --lib 2>&1 | grep -oP 'test result: ok\. \d+ passed' | tr -d '\n'; echo
 
 rust-bench:
 	$(CARGO) bench
@@ -44,12 +46,23 @@ rust-build:
 
 # ── Combined ────────────────────────────────────────────────────────
 
-test: python-test-soft rust-test
+test:
+	@echo "=============================="
+	@echo " Python Tests"
+	@echo "=============================="
+	@$(MAKE) --no-print-directory python-test-soft
+	@echo ""
+	@echo "=============================="
+	@echo " Rust Tests"
+	@echo "=============================="
+	@$(MAKE) --no-print-directory rust-test
 
 test-verbose: python-test-verbose rust-test
 
 python-test-soft:
-	-$(PYTHON) -m oxytest tests/ --tb=no 2>&1 | tail -5
+	@printf "Python tests: "
+	@$(PYTHON) -m oxytest tests/ --tb=no 2>&1 | tee /tmp/oxytest_out.txt | grep -oP 'Results: \d+ tests|  passed: \d+|  failed: \d+|  skipped: \d+' | tr '\n' ' '; echo
+	@rm -f /tmp/oxytest_out.txt; true
 
 # ── Lint ────────────────────────────────────────────────────────────
 
