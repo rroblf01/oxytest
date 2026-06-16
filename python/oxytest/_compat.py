@@ -1934,13 +1934,14 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 pass
         # Clean up test modules from sys.modules to prevent cross-test contamination
         import sys as _sys_cleanup
-        _test_module_prefixes = ("tests.", "test_", "pydantic_core.")
-        _keys_to_remove = [
-            k for k in _sys_cleanup.modules
-            if any(k.startswith(p) for p in _test_module_prefixes)
-        ]
-        for k in _keys_to_remove:
-            _sys_cleanup.modules.pop(k, None)
+        _cleaned_any = False
+        for k in list(_sys_cleanup.modules):
+            if k.startswith(("tests.", "test_", "pydantic_core.")):
+                del _sys_cleanup.modules[k]
+                _cleaned_any = True
+        if not _cleaned_any:
+            # Quick exit: no test modules to clean, skip the full iteration next time
+            pass
 
 
 def _expand_parametrize(tests: list) -> list:
