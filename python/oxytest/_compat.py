@@ -1629,6 +1629,10 @@ def _execute_test(path: str, name: str, args_json: str):
         _execute_test_impl(path, name, args_json)
     except SkipTest as e:
         raise Exception("SKIPPED:" + str(e))
+    except RecursionError as e:
+        import sys as _sys
+        _sys.setrecursionlimit(5000)  # Increased limit for next test
+        raise Exception("RECURSION:" + str(e))
 
 
 def _execute_test_impl(path: str, name: str, args_json: str):
