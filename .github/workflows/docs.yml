@@ -1,20 +1,13 @@
 name: Build & deploy docs
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      - ".github/workflows/docs.yml"
   workflow_run:
     workflows: ["Publish"]
     types: [completed]
   workflow_dispatch:
 
-# Burst of pushes to main only needs the latest docs build to
-# ship — earlier in-flight builds are immediately stale. Cancel
-# them so we don't burn runner minutes deploying superseded HTML.
+# Docs only deploy after a PyPI publish (or manual trigger).
+# Cancel any in-flight builds to avoid burning runner minutes.
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
