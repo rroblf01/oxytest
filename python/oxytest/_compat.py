@@ -235,13 +235,26 @@ class _WarningsChecker:
         return _WarningsRecorder(self._cm)
 
     def __exit__(self, *exc_info):
+        import warnings
         self._warnings.__exit__(*exc_info)
+        found = False
         for w in self._cm:
             if issubclass(w.category, self.expected_warning):
                 if self.match is None or re.search(self.match, str(w.message)):
                     self.warning = w
-                    return True
-        raise Failed(f"DID NOT WARN {self.expected_warning}")
+                    found = True
+                    continue
+            warnings.warn_explicit(
+                message=w.message,
+                category=w.category,
+                filename=w.filename,
+                lineno=w.lineno,
+                module=w.__module__,
+                source=getattr(w, 'source', None),
+            )
+        if not found:
+            raise Failed(f"DID NOT WARN {self.expected_warning}")
+        return True
 
     def __len__(self):
         return 1 if self.warning is not None else 0
@@ -380,6 +393,10 @@ class _RequestNode:
         self._test_func = test_func
 
     @property
+    def nodeid(self):
+        return _get_test_full_id(self._test_func)
+
+    @property
     def name(self):
         if self._test_func is not None:
             return self._test_func.__name__
@@ -448,24 +465,51 @@ def _get_fixtures(func):
     return fixtures
 
 
-def _should_skip(func):
-    if hasattr(func, "_oxytest_marks"):
-        for mark_name, args, kwargs in func._oxytest_marks:
-            if mark_name == "skip":
-                return kwargs.get("reason", "skipped")
-            if mark_name == "skipif":
-                if args and any(args):
-                    return kwargs.get("reason", "condition true")
+def _should_skip(func, cls=None, mod=None):
+    for obj in (func, cls, mod):
+        if obj is not None and hasattr(obj, "_oxytest_marks"):
+            for mark_name, args, kwargs in obj._oxytest_marks:
+                if mark_name == "skip":
+                    return kwargs.get("reason", "skipped")
+                if mark_name == "skipif":
+                    if args and any(args):
+                        return kwargs.get("reason", "condition true")
+    # Also check module-level pytestmark attribute
+    if mod is not None:
+        mod_marks = getattr(mod, "pytestmark", None)
+        if mod_marks is not None:
+            if not isinstance(mod_marks, (list, tuple)):
+                mod_marks = [mod_marks]
+            for m in mod_marks:
+                if hasattr(m, "name") and hasattr(m, "args") and hasattr(m, "kwargs"):
+                    if m.name == "skip":
+                        return m.kwargs.get("reason", "skipped")
+                    if m.name == "skipif":
+                        if m.args and any(m.args):
+                            return m.kwargs.get("reason", "condition true")
     return None
 
 
-def _is_xfail(func):
-    if hasattr(func, "_oxytest_marks"):
-        for mark_name, args, kwargs in func._oxytest_marks:
-            if mark_name == "xfail":
-                condition = kwargs.get("condition")
-                if condition is None or condition:
-                    return kwargs.get("reason", "")
+def _is_xfail(func, cls=None, mod=None):
+    for obj in (func, cls, mod):
+        if obj is not None and hasattr(obj, "_oxytest_marks"):
+            for mark_name, args, kwargs in obj._oxytest_marks:
+                if mark_name == "xfail":
+                    condition = kwargs.get("condition")
+                    if condition is None or condition:
+                        return kwargs.get("reason", "")
+    # Also check module-level pytestmark attribute
+    if mod is not None:
+        mod_marks = getattr(mod, "pytestmark", None)
+        if mod_marks is not None:
+            if not isinstance(mod_marks, (list, tuple)):
+                mod_marks = [mod_marks]
+            for m in mod_marks:
+                if hasattr(m, "name") and hasattr(m, "args") and hasattr(m, "kwargs"):
+                    if m.name == "xfail":
+                        condition = m.kwargs.get("condition")
+                        if condition is None or condition:
+                            return m.kwargs.get("reason", "")
     return None
 
 
@@ -520,15 +564,31 @@ class TerminalReporter:
         if result.passed:
             self.stats["passed"] += 1
         else:
-            if result.error == "SKIPPED":
+            err = result.error or ""
+            if "SKIPPED:" in err:
                 self.stats["skipped"] += 1
                 self.skipped.append(result)
+            elif "XFAIL:" in err:
+                self.stats["xfailed"] += 1
+                self.skipped.append(result)
+            elif "XPASS:" in err:
+                self.stats["passed"] += 1
             else:
                 self.stats["failed"] += 1
                 self.failures.append(result)
 
         if self.verbose:
-            status = "PASSED" if result.passed else "FAILED"
+            err = result.error or ""
+            if "SKIPPED:" in err:
+                status = "SKIPPED"
+            elif "XFAIL:" in err:
+                status = "XFAIL"
+            elif "XPASS:" in err:
+                status = "XPASS"
+            elif result.passed:
+                status = "PASSED"
+            else:
+                status = "FAILED"
             test_name = f"{result.test.path}::{result.test.name}"
             print(f"{status:>7} {test_name}  [{result.duration_ms}ms]")
         elif not self.quiet:
@@ -856,6 +916,8 @@ def _run_tests(
     # Add cwd to sys.path so relative module names resolve
     import sys as _sys
     _cwd = os.getcwd()
+    global _original_cwd
+    _original_cwd = _cwd
     if _cwd not in _sys.path:
         _sys.path.insert(0, _cwd)
 
@@ -1023,7 +1085,7 @@ def _format_assert_detail(source_line: str, filename: str, lineno: int) -> str:
 
 
 def _cache_dir() -> str:
-    return os.path.join(".pytest_cache", "oxytest")
+    return os.path.join(_original_cwd if _original_cwd else os.getcwd(), ".pytest_cache", "oxytest")
 
 
 def _lastfailed_path() -> str:
@@ -1349,14 +1411,34 @@ def _module_cache_clear():
     _module_cache.clear()
     _parametrize_cache.clear()
     _conftest_seen.clear()
+    _test_full_ids.clear()
+    global _original_cwd
+    _original_cwd = ""
 
 
 _import_lock = __import__('threading').Lock()
+_test_full_ids: dict = {}
+_original_cwd: str = ""
+
+
+def _get_test_full_id(func) -> str:
+    return _test_full_ids.get(id(func), "")
+
+
+def _set_test_full_id(func, test_id: str):
+    _test_full_ids[id(func)] = test_id
 
 def _execute_test(path: str, name: str, args_json: str):
     """Import module, resolve fixtures, and run a single test.
     Raises on failure (caught by Rust runner).
     """
+    try:
+        _execute_test_impl(path, name, args_json)
+    except SkipTest as e:
+        raise Exception("SKIPPED:" + str(e))
+
+
+def _execute_test_impl(path: str, name: str, args_json: str):
     import importlib.util
     import inspect
     import sys as _sys
@@ -1365,7 +1447,7 @@ def _execute_test(path: str, name: str, args_json: str):
     fm = get_fixture_manager()
 
     # 1. Import module (cached per filepath) — with lock for parallel safety
-    filepath = os.path.abspath(path)
+    filepath = os.path.join(_original_cwd, path) if not os.path.isabs(path) else path
     dirpath = os.path.dirname(filepath)
 
     with _import_lock:
@@ -1382,10 +1464,17 @@ def _execute_test(path: str, name: str, args_json: str):
                 raise ImportError(f"Could not load spec for {path}")
             mod = importlib.util.module_from_spec(spec)
             _sys.modules[module_name] = mod
-            spec.loader.exec_module(mod)
+            try:
+                spec.loader.exec_module(mod)
+            except SkipTest:
+                _module_cache[filepath] = None
+                raise
             _module_cache[filepath] = mod
         else:
             mod = _module_cache[filepath]
+
+    if mod is None:
+        raise Exception("SKIPPED:module could not be imported (dependency missing)")
 
     fm.register_from_module(mod)
 
@@ -1406,6 +1495,7 @@ def _execute_test(path: str, name: str, args_json: str):
         func = getattr(mod, clean_name)
 
     fm.current_test_func = func
+    _set_test_full_id(func, name)
 
     # 3. Parse parametrize args (match by name, not position)
     import json
@@ -1506,6 +1596,8 @@ def _execute_test(path: str, name: str, args_json: str):
         if fdef.autouse and fname not in all_params:
             try:
                 fm.resolve(fname)
+            except SkipTest:
+                raise
             except Exception:
                 pass
 
@@ -1526,18 +1618,48 @@ def _execute_test(path: str, name: str, args_json: str):
                 )
 
 
+    # 4c. Check skip markers
+    skip_reason = _should_skip(func, cls=cls, mod=mod)
+    if skip_reason:
+        raise Exception("SKIPPED:" + str(skip_reason))
+
+    xfail_reason = _is_xfail(func, cls=cls, mod=mod)
+
     # 5. Call test
     try:
-        import asyncio as _asyncio
-        if inspect.iscoroutinefunction(func):
-            if param_values:
-                _asyncio.run(func(*param_values))
+        if xfail_reason is not None:
+            try:
+                import asyncio as _asyncio
+                if inspect.iscoroutinefunction(func):
+                    if param_values:
+                        _asyncio.run(func(*param_values))
+                    else:
+                        _asyncio.run(func())
+                elif param_values:
+                    func(*param_values)
+                else:
+                    func()
+            except SkipTest:
+                raise
+            except BaseException:
+                import traceback as _tb
+                _tb.print_exc()
+                raise Exception("XFAIL:" + str(xfail_reason))
             else:
-                _asyncio.run(func())
-        elif param_values:
-            func(*param_values)
+                raise Exception("XPASS:" + str(xfail_reason))
         else:
-            func()
+            import asyncio as _asyncio
+            if inspect.iscoroutinefunction(func):
+                if param_values:
+                    _asyncio.run(func(*param_values))
+                else:
+                    _asyncio.run(func())
+            elif param_values:
+                func(*param_values)
+            else:
+                func()
+    except SkipTest:
+        raise Exception("SKIPPED:" + str(sys.exc_info()[1]))
     except AssertionError:
         import traceback as _tb
         tb_list = _tb.extract_tb(sys.exc_info()[2])
@@ -1675,7 +1797,6 @@ def _expand_parametrize(tests: list) -> list:
             except Exception as exc:
                 import sys as _sys2
                 print(f"  [oxytest] Warning: could not expand parametrize for {test.name}: {exc}", file=_sys2.stderr)
-                expanded.append(test)
                 continue
             for i, val in enumerate(argvalues_iter):
                 if isinstance(val, dict) and "values" in val:
@@ -1702,7 +1823,6 @@ def _expand_parametrize(tests: list) -> list:
 
         # If no value sets were collected (e.g. all parametrize marks failed), skip
         if not all_value_sets:
-            expanded.append(test)
             continue
 
         # Build cartesian product of all parametrize marks

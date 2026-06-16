@@ -52,6 +52,7 @@ class FixtureManager:
         self.register_builtin("mocker", self._fixture_mocker, scope="function")
         self.register_builtin("benchmark", self._fixture_benchmark, scope="function")
         self.register_builtin("create_module", self._fixture_create_module, scope="function")
+        self.register_builtin("pytestconfig", self._fixture_pytestconfig, scope="session")
 
     def register_builtin(self, name: str, func: Callable, scope: str = "function"):
         self._fixtures[name] = FixtureDef(func, scope=scope, name=name)
@@ -69,38 +70,36 @@ class FixtureManager:
 
     def register_from_module(self, module):
         for attr_name in dir(module):
-            if attr_name.startswith("_"):
-                continue
             obj = getattr(module, attr_name)
             if hasattr(obj, "_oxytest_fixture"):
                 self.register(obj)
-            # Detect fixtures from real pytest plugins (e.g. pytest_mock, pytest_examples)
-            elif hasattr(obj, "__wrapped__") and hasattr(obj, "name"):
-                wrapped = obj.__wrapped__
-                if callable(wrapped) and not hasattr(wrapped, "_oxytest_fixture"):
-                    # Skip fixtures from modules that rely on internal pytest APIs
-                    mod = getattr(wrapped, "__module__", "")
-                    if mod.startswith(("pytest_benchmark", "pytest_codspeed")):
-                        continue
-                    # Skip fixtures with parameters that can't be resolved
-                    import inspect as _inspect
-                    try:
-                        _sig = _inspect.signature(wrapped)
-                        has_internal = any(
-                            p.name.startswith("_") and p.default is p.empty
-                            for p in _sig.parameters.values()
-                        )
-                        if has_internal:
-                            continue
-                    except Exception:
-                        pass
-                    wrapped._oxytest_fixture = {
-                        "scope": "function",
-                        "params": None,
-                        "autouse": False,
-                        "name": attr_name,
-                    }
-                    self.register(wrapped)
+            elif hasattr(obj, "_pytestfixturefunction") or (hasattr(obj, "__wrapped__") and hasattr(obj, "name")):
+                if hasattr(obj, "_fixture_function"):
+                    wrapped = obj._fixture_function
+                elif hasattr(obj, "__wrapped__"):
+                    wrapped = obj.__wrapped__
+                else:
+                    continue
+                if not callable(wrapped) or hasattr(wrapped, "_oxytest_fixture"):
+                    continue
+                mod = getattr(wrapped, "__module__", "")
+                if mod.startswith(("pytest_benchmark", "pytest_codspeed")):
+                    continue
+                scope = "function"
+                params = None
+                autouse = False
+                if hasattr(obj, "_fixture_function_marker"):
+                    marker = obj._fixture_function_marker
+                    scope = getattr(marker, "scope", "function") or "function"
+                    params = getattr(marker, "params", None)
+                    autouse = getattr(marker, "autouse", False)
+                wrapped._oxytest_fixture = {
+                    "scope": scope,
+                    "params": params,
+                    "autouse": autouse,
+                    "name": attr_name,
+                }
+                self.register(wrapped)
 
     def resolve(self, name: str, scope: str = "function", _resolving: set = None) -> Any:
         if _resolving is None:
@@ -285,6 +284,10 @@ class FixtureManager:
             mod.__dict__.update(ns)
             return mod
         return _create_module
+
+    def _fixture_pytestconfig(self):
+        from oxytest._compat import Config as _OxyConfig
+        return self._config or _OxyConfig({})
 
 
 class MockerFixture:
