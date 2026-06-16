@@ -421,8 +421,13 @@ class MonkeyPatch:
             if raising:
                 raise
             return
+        try:
+            delattr(target, name)
+        except (AttributeError, TypeError):
+            if raising:
+                raise
+            return
         self._saved.append(("setattr", target, name, old))
-        delattr(target, name)
 
     def setitem(self, mapping, key, value):
         old = mapping.get(key, _NOT_SET)

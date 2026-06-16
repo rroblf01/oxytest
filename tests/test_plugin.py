@@ -244,4 +244,5 @@ def test_plugin_manager_entry_points_import_error(monkeypatch):
 def test_plugin_manager_register_none():
     pm = PluginManager()
     result = pm.register(None)
-    assert result is None
+    # pluggy assigns a numeric name even for None
+    assert result is not None

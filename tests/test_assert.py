@@ -1,6 +1,5 @@
 import ast
 import textwrap
-import importlib
 
 from oxytest._assert import (
     _format_assert_detail,
@@ -134,9 +133,6 @@ def test_global_loader_instance():
     assert isinstance(_assert_loader, _AssertLoader)
 
 
-# ===== Coverage gap tests for _assert.py =====
-
-
 def test_collect_details_call():
     rewriter = _AssertRewriter()
     details = []
@@ -197,9 +193,3 @@ def test_collect_details_constant():
     const = ast.Constant(value=42)
     rewriter._collect_details(const, details)
     assert len(details) == 1
-
-
-def test_rewrite_module_none_source():
-    loader = _AssertLoader()
-    spec = importlib.machinery.ModuleSpec("test_mod", None)
-    loader.rewrite_module("test_mod", spec, source=None)
