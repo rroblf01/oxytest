@@ -1063,7 +1063,16 @@ def _run_tests(
     global _original_cwd
     _original_cwd = _cwd
     if _cwd not in _sys.path:
-        _sys.path.insert(0, _cwd)
+        _sys.path.append(_cwd)
+
+    # Remove tests/ subdirectories from sys.path to prevent package shadowing
+    _shadow_candidates = [
+        os.path.join(_cwd, "tests", sp)
+        for sp in ("pydantic_core", "types", "pydantic")
+    ]
+    for _sp in _shadow_candidates:
+        if _sp in _sys.path:
+            _sys.path.remove(_sp)
 
     has_expr = keyword and any(op in keyword.lower() for op in (" and ", " or ", " not "))
     all_tests = []
@@ -1625,13 +1634,14 @@ def _execute_test(path: str, name: str, args_json: str):
     """Import module, resolve fixtures, and run a single test.
     Raises on failure (caught by Rust runner).
     """
+    import sys as _sys
+    _sys.setrecursionlimit(10000)  # Prevent RecursionError in deep schema recursion
     try:
         _execute_test_impl(path, name, args_json)
     except SkipTest as e:
         raise Exception("SKIPPED:" + str(e))
     except RecursionError as e:
-        import sys as _sys
-        _sys.setrecursionlimit(5000)  # Increased limit for next test
+        _sys.setrecursionlimit(5000)  # Reset for next test
         raise Exception("RECURSION:" + str(e))
 
 
@@ -1966,7 +1976,8 @@ def _expand_parametrize(tests: list) -> list:
                     _module_cache[filepath] = None
             except Exception as exc:
                 import sys as _sys2
-                print(f"  [oxytest] Warning: could not import {filepath}: {exc}", file=_sys2.stderr)
+                if not str(exc).startswith("SKIPPED"):
+                    print(f"  [oxytest] Warning: could not import {filepath}: {exc}", file=_sys2.stderr)
                 _module_cache[filepath] = None
 
         mod = _module_cache.get(filepath)
