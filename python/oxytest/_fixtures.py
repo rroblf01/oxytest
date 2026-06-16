@@ -53,6 +53,20 @@ class FixtureManager:
         self.register_builtin("benchmark", self._fixture_benchmark, scope="function")
         self.register_builtin("create_module", self._fixture_create_module, scope="function")
         self.register_builtin("pytestconfig", self._fixture_pytestconfig, scope="session")
+        self._setup_third_party_fixtures()
+
+    def _setup_third_party_fixtures(self):
+        """Register fixtures commonly provided by third-party pytest plugins."""
+        self._fixtures["eval_example"] = FixtureDef(self._fixture_eval_example, scope="function", name="eval_example")
+        self._fixtures["benchmark"] = FixtureDef(self._fixture_benchmark, scope="function", name="benchmark")
+
+    def _fixture_eval_example(self):
+        """Lazy import of pytest_examples fixture."""
+        try:
+            from pytest_examples import EvalExample
+            return EvalExample()
+        except Exception:
+            return None
 
     def register_builtin(self, name: str, func: Callable, scope: str = "function"):
         self._fixtures[name] = FixtureDef(func, scope=scope, name=name)
