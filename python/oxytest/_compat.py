@@ -1653,6 +1653,8 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     from oxytest._fixtures import get_fixture_manager
     fm = get_fixture_manager()
 
+    _loaded_modules: list[str] = []
+
     # 1. Import module (cached per filepath) — with lock for parallel safety
     filepath = os.path.join(_original_cwd, path) if not os.path.isabs(path) else path
     dirpath = os.path.dirname(filepath)
@@ -1671,6 +1673,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 raise ImportError(f"Could not load spec for {path}")
             mod = importlib.util.module_from_spec(spec)
             _sys.modules[module_name] = mod
+            _loaded_modules.append(module_name)
             try:
                 spec.loader.exec_module(mod)
             except SkipTest:
@@ -1932,15 +1935,10 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 instance.tearDown()
             except Exception:
                 pass
-        # Clean up test modules from sys.modules to prevent cross-test contamination
+        # Clean up test modules from sys.modules (tracked by _loaded_modules for O(1))
         import sys as _sys_cleanup
-        _cleaned_any = False
-        for k in list(_sys_cleanup.modules):
-            if k.startswith(("tests.", "test_", "pydantic_core.")):
-                del _sys_cleanup.modules[k]
-                _cleaned_any = True
-        if not _cleaned_any:
-            # Quick exit: no test modules to clean, skip the full iteration next time
+        for _mod_name in _loaded_modules:
+            _sys_cleanup.modules.pop(_mod_name, None)
             pass
 
 

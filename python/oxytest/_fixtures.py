@@ -42,6 +42,7 @@ class FixtureManager:
         self._config = None
         self._current_request_param = None
         self._setup_builtins()
+        self._registered_files: set = set()
 
     def _setup_builtins(self):
         self.register_builtin("tmp_path", self._fixture_tmp_path, scope="function")
@@ -83,6 +84,10 @@ class FixtureManager:
             )
 
     def register_from_module(self, module):
+        mod_id = id(module)
+        if mod_id in self._registered_files:
+            return
+        self._registered_files.add(mod_id)
         for attr_name in dir(module):
             obj = getattr(module, attr_name)
             if hasattr(obj, "_oxytest_fixture"):
