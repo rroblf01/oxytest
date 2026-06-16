@@ -1,10 +1,11 @@
 SHELL := /bin/bash
-UV := uv
-PYTEST := $(UV) run python -m oxytest
-RUFF := $(UV) run ruff
-TY := $(UV) run ty
+VENV := .venv
+export PATH := $(VENV)/bin:$(PATH)
+PYTHON := python
+RUFF := ruff
+TY := ty
 CARGO := cargo
-COVERAGE := $(UV) run coverage
+COVERAGE := coverage
 
 .PHONY: all python-test rust-test test lint ty-check ruff-check clean help
 
@@ -13,13 +14,13 @@ all: lint test
 # ── Python ──────────────────────────────────────────────────────────
 
 python-test:
-	$(PYTEST) tests/ --tb=no
+	$(PYTHON) -m oxytest tests/ --tb=no
 
 python-test-verbose:
-	$(PYTEST) tests/ -v
+	$(PYTHON) -m oxytest tests/ -v
 
 python-test-fast:
-	$(PYTEST) tests/ -q
+	$(PYTHON) -m oxytest tests/ -q
 
 python-coverage:
 	$(COVERAGE) run -m oxytest tests/ --tb=no
@@ -48,7 +49,7 @@ test: python-test-soft rust-test
 test-verbose: python-test-verbose rust-test
 
 python-test-soft:
-	-$(PYTEST) tests/ --tb=no 2>&1 | tail -5
+	-$(PYTHON) -m oxytest tests/ --tb=no 2>&1 | tail -5
 
 # ── Lint ────────────────────────────────────────────────────────────
 
@@ -78,7 +79,7 @@ help:
 	@echo "  all               - lint + test"
 	@echo "  lint              - run ruff + ty (type check)"
 	@echo "  test              - python (soft) + rust tests"
-	@echo "  python-test       - run Python tests (strict)"
+	@echo "  python-test       - run Python tests"
 	@echo "  python-test-soft  - run Python tests (ignores exit code)"
 	@echo "  rust-test         - run Rust unit tests"
 	@echo "  python-coverage   - run with coverage report"
