@@ -1825,7 +1825,16 @@ def _execute_test_impl(path: str, name: str, args_json: str):
             try:
                 import asyncio as _asyncio
                 if inspect.iscoroutinefunction(func):
-                    if param_values:
+                    _anyio_backend = None
+                    if _fixture_params and isinstance(_fixture_params, dict):
+                        _anyio_backend = _fixture_params.get("__anyio_backend__")
+                    if _anyio_backend:
+                        import anyio as _anyio
+                        if param_values:
+                            _anyio.run(func, *param_values, backend=_anyio_backend)
+                        else:
+                            _anyio.run(func, backend=_anyio_backend)
+                    elif param_values:
                         _asyncio.run(func(*param_values))
                     else:
                         _asyncio.run(func())
@@ -1844,7 +1853,16 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         else:
             import asyncio as _asyncio
             if inspect.iscoroutinefunction(func):
-                if param_values:
+                _anyio_backend = None
+                if _fixture_params and isinstance(_fixture_params, dict):
+                    _anyio_backend = _fixture_params.get("__anyio_backend__")
+                if _anyio_backend:
+                    import anyio as _anyio
+                    if param_values:
+                        _anyio.run(func, *param_values, backend=_anyio_backend)
+                    else:
+                        _anyio.run(func, backend=_anyio_backend)
+                elif param_values:
                     _asyncio.run(func(*param_values))
                 else:
                     _asyncio.run(func())
@@ -2167,6 +2185,68 @@ def _expand_parametrize(tests: list) -> list:
 
         if _extra_expanded:
             expanded = _extra_expanded
+
+    # Phase 3: Expand @pytest.mark.anyio tests
+    # Duplicate each async test for each anyio backend (asyncio, trio)
+    _anyio_backends = ["asyncio", "trio"]
+    _anyio_expanded = []
+    for test in expanded:
+        filepath = os.path.abspath(test.path)
+        mod = _module_cache.get(filepath)
+        if mod is None:
+            _anyio_expanded.append(test)
+            continue
+        # Get the test function
+        func = None
+        if "::" in test.name:
+            parts = test.name.split("::")
+            cls = getattr(mod, parts[0], None)
+            if cls and len(parts) > 1:
+                func = getattr(cls, parts[1], None)
+        else:
+            clean_name = test.name.split("[")[0] if "[" in test.name else test.name
+            func = getattr(mod, clean_name, None)
+        if func is None:
+            _anyio_expanded.append(test)
+            continue
+        # Check for anyio marker
+        marks = getattr(func, "_oxytest_marks", [])
+        has_anyio = any(m[0] == "anyio" for m in marks) or hasattr(func, "_anyio_mark")
+        if not has_anyio:
+            _anyio_expanded.append(test)
+            continue
+        # Check if test is async
+        import inspect as _anyio_inspect
+        if not _anyio_inspect.iscoroutinefunction(func):
+            _anyio_expanded.append(test)
+            continue
+        # Create clones for each backend
+        for _backend in _anyio_backends:
+            test_clone = TestItem()
+            test_clone.path = test.path
+            test_clone.line_no = test.line_no
+            test_clone.args_json = test.args_json
+            # Add backend suffix to name (e.g., test_foo[asyncio])
+            if "[" in test.name:
+                base, bracket = test.name.split("[", 1)
+                bracket = bracket.rstrip("]")
+                test_clone.name = f"{base}[{bracket}-{_backend}]"
+            else:
+                test_clone.name = f"{test.name}[{_backend}]"
+            # Store backend info in cache
+            _cache_key = (filepath, test_clone.name)
+            _cached = _parametrize_cache.get((filepath, test.name))
+            if _cached and len(_cached) == 3:
+                _argnames, _values, _fixture_params = _cached
+                _parametrize_cache[_cache_key] = (_argnames, _values, {**_fixture_params, "__anyio_backend__": _backend})
+            elif _cached and len(_cached) == 2:
+                _argnames, _values = _cached
+                _parametrize_cache[_cache_key] = (_argnames, _values, {"__anyio_backend__": _backend})
+            else:
+                _parametrize_cache[_cache_key] = ([], [], {"__anyio_backend__": _backend})
+            _anyio_expanded.append(test_clone)
+    if _anyio_expanded:
+        expanded = _anyio_expanded
 
     return expanded
 
