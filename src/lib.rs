@@ -1,6 +1,6 @@
-mod types;
-mod discovery;
-mod runner;
+pub mod types;
+pub mod discovery;
+pub mod runner;
 
 use pyo3::prelude::*;
 

@@ -1,5 +1,4 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::path::Path;
 
 fn bench_is_test_file(c: &mut Criterion) {
     let samples = [
