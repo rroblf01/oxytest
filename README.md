@@ -5,7 +5,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/oxytest?cacheSeconds=300)](https://pypi.org/project/oxytest/)
 [![Python](https://img.shields.io/pypi/pyversions/oxytest?cacheSeconds=300)](https://pypi.org/project/oxytest/)
-[![License](https://img.shields.io/github/license/rroblf01/oxytest)](https://github.com/rroblf01/oxytest/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/rroblf01/oxytest/blob/main/LICENSE)
 
 ## Why Oxytest?
 
