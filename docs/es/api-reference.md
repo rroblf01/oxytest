@@ -282,6 +282,14 @@ oxytest migrate src/ --check
 | `--cache-clear` | Limpiar caché antes de ejecutar |
 | `--lf`, `--last-failed` | Solo tests que fallaron antes |
 | `--ff`, `--failed-first` | Fallos primero, luego el resto |
+| `--pdb` | Depurador post-mortem al fallar |
+| `--trace` | Depurador antes de cada test |
+| `--cov[=FUENTE]` | Medir cobertura de código |
+| `--cov-report=TIPO` | Tipo de reporte (term, html, xml) |
+| `--cov-config=ARCHIVO` | Archivo de configuración para coverage |
+| `--cov-branch` | Habilitar cobertura de ramas |
+| `--cov-fail-under=N` | Fallar si cobertura menor a N% |
+| `--cov-append` | Añadir a datos de cobertura existentes |
 | `--version` | Mostrar versión |
 | `-h`, `--help` | Mostrar ayuda |
 
@@ -291,3 +299,5 @@ oxytest migrate src/ --check
 |--------|-------------|
 | 0 | Todos los tests pasaron |
 | 1 | Algunos tests fallaron |
+| 2 | Error de ejecución de tests |
+| 4 | No se recolectaron tests |

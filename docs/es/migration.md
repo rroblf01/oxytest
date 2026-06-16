@@ -123,9 +123,9 @@ oxytest -n 4
 
 Oxytest usa escaneo AST (Árbol de Sintaxis Abstracta) en lugar de importar módulos. Esto hace que el descubrimiento sea **10-100x más rápido** para proyectos grandes. La desventaja es que algunos patrones de generación dinámica de tests (como atributos `__test__` en `__init__`) pueden no ser descubiertos.
 
-### 3. Sin flag `--coverage`
+### 3. Soporte de cobertura
 
-El flag `--coverage` no está implementado. Usa `pytest-cov` con pytest para cobertura, o una herramienta de cobertura directamente.
+oxytest tiene soporte nativo de `--cov` (requiere `pip install coverage` o `pip install oxytest[cov]`). Usa `--cov=FUENTE` para medir cobertura, o ejecuta `coverage run -m oxytest` para usar sin configuración.
 
 ## Comparación de Flags CLI
 
@@ -158,8 +158,27 @@ El flag `--coverage` no está implementado. Usa `pytest-cov` con pytest para cob
 | `--lf` | `--lf` | ✅ |
 | `--ff` | `--ff` | ✅ |
 | `-p` plugins | `-p` plugins | ✅ Integrado, sin plugin |
-| `--coverage` | — | No soportado |
-| `--pdb` | — | Usar `pytest.set_trace()` |
+| `--cov` | `--cov` | ✅ Requiere coverage.py (dep. opcional) |
+| `--pdb` | `--pdb` | ✅ También `--trace` |
+| `--cov-report` | `--cov-report` | ✅ |
+| `--cov-branch` | `--cov-branch` | ✅ |
+| `--cov-fail-under` | `--cov-fail-under` | ✅ |
+
+### 4. Integración con VSCode
+
+Oxytest incluye un plugin VSCode integrado (JSON-RPC 2.0 sobre pipe nominal). Cuando VSCode ejecuta `-p vscode_pytest`, oxytest carga su propia implementación. No se necesita el plugin `vscode-pytest`.
+
+### 5. Configuración via pyproject.toml
+
+Oxytest lee la configuración de `[tool.oxytest]` en `pyproject.toml`:
+
+```toml
+[tool.oxytest]
+addopts = "-v --tb=short"
+testpaths = ["tests/"]
+```
+
+Las flags de CLI tienen prioridad. No se necesita archivo de configuración separado ni `setup.cfg`. Consulta [Uso](usage.md#configuración-via-pyprojecttoml) para todas las opciones soportadas.
 
 ## Solución de Problemas
 

@@ -9,7 +9,7 @@ Opciones:
   -v, --verbose       Aumentar verbosidad
   -q, --quiet         Salida silenciosa
   -x, --exitfirst     Detener en el primer fallo
-  -k EXPRESIÓN        Filtrar tests por expresión clave
+  -k EXPRESIÓN        Filtrar tests por expresión clave (soporta and/or/not)
   --tb=estilo         Estilo de traceback (short, long, native, no)
   -n WORKERS          Número de workers paralelos (por defecto: CPUs)
   --junitxml=RUTA     Generar reporte JUnit XML
@@ -29,6 +29,14 @@ Opciones:
   --cache-clear       Limpiar caché antes de ejecutar
   --lf, --last-failed  Ejecutar solo tests que fallaron la última vez
   --ff, --failed-first Ejecutar tests fallidos primero, luego el resto
+  --pdb               Entrar al depurador al fallar
+  --trace             Entrar al depurador antes de cada test
+  --cov[=FUENTE]      Medir cobertura de código
+  --cov-report=TIPO   Tipo de reporte (term, html, xml)
+  --cov-config=ARCH   Archivo de configuración para coverage
+  --cov-branch        Habilitar cobertura de ramas
+  --cov-fail-under=N  Fallar si cobertura menor a N%
+  --cov-append        Añadir a datos de cobertura existentes
   --version           Mostrar versión
   -h, --help          Mostrar ayuda
 
@@ -61,8 +69,9 @@ oxytest -n auto
 # Detener tras el primer fallo
 oxytest -x
 
-# Ejecutar tests que coincidan con una palabra clave
+# Ejecutar tests que coincidan con una expresión clave
 oxytest -k "user or auth"
+oxytest -k "not slow and (math or api)"
 
 # Generar reporte JUnit XML
 oxytest --junitxml report.xml
@@ -109,6 +118,18 @@ oxytest --fixtures
 # Listar marcadores registrados
 oxytest --markers
 
+# Entrar al depurador al fallar
+oxytest --pdb
+
+# Entrar al depurador antes de cada test
+oxytest --trace
+
+# Medir cobertura (requiere: pip install coverage)
+oxytest --cov=src/                         # reporte en terminal
+oxytest --cov=src/ --cov-report=html        # reporte HTML
+oxytest --cov=src/ --cov-branch             # cobertura de ramas
+oxytest --cov=src/ --cov-fail-under=80      # exigir mínimo
+
 # Cargar un plugin
 oxytest -p miplugin
 
@@ -121,6 +142,61 @@ oxytest migrate --dry-run             # solo previsualizar
 oxytest migrate --reverse             # oxytest → pytest
 oxytest migrate --check               # error si encuentra imports
 ```
+
+## Configuración via pyproject.toml
+
+Oxytest lee la configuración de la sección `[tool.oxytest]` en `pyproject.toml`:
+
+```toml
+[tool.oxytest]
+addopts = "-v --tb=short"
+testpaths = ["tests/"]
+ignore = ["tests/legacy/"]
+markers = [
+    "slow: marks slow tests",
+    "integration: marks integration tests",
+]
+cov_source = "src/"
+cov_report = "html"
+cov_branch = true
+cov_fail_under = 80.0
+```
+
+Las flags de CLI tienen prioridad sobre los valores del archivo de configuración.
+
+## Integración con VSCode
+
+Oxytest incluye un plugin integrado que habla el protocolo de tests de la extensión de Python de VSCode mediante JSON-RPC 2.0 sobre un pipe nominal. No se necesitan dependencias adicionales.
+
+### Configuración
+
+1. Instala oxytest en tu entorno de VSCode.
+2. En `.vscode/settings.json`, asegúrate de tener:
+
+```json
+{
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestPath": "oxytest"
+}
+```
+
+### Cómo funciona
+
+Cuando VSCode ejecuta pytest con `-p vscode_pytest`, oxytest intercepta esto y carga su propio plugin `_vscode.py`. Este plugin:
+
+- Descubre tests y construye un árbol con nodos de carpeta/archivo/clase/función/parametrizados
+- Envía resultados de ejecución en tiempo real (pass/fail/skip/error) mediante un pipe nominal
+- Soporta tests parametrizados y tests basados en clases
+- Se integra con informes de cobertura
+
+### Características soportadas
+
+- ✅ Descubrimiento de tests con árbol completo
+- ✅ Resultados en tiempo real
+- ✅ Trazas y mensajes de error por test
+- ✅ Nodos parametrizados
+- ✅ Integración con cobertura
+- ✅ Estados: error, fallo, salto, xfail
 
 ## API de Python
 

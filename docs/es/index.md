@@ -45,5 +45,10 @@ python -c "import oxytest as pytest; pytest.main()"
 - ✅ `--setup-show` — traza setup/teardown de fixtures
 - ✅ Sistema de plugins (basado en pluggy, soporta `pytest_addoption`, `pytest_configure`, conftest, entry points)
 - ✅ Herramienta de migración (`oxytest migrate`) — migración automática de imports entre pytest y oxytest
-- ✅ Sistema de caché (`--lf`/`--last-failed`, `--ff`/`--failed-first`)
-- ✅ Flags CLI: `-v`, `-q`, `-x`, `-k`, `--tb`, `-n`, `--junitxml`, `-s`, `--maxfail`, `--ignore`, `--collect-only`, `--durations`, `-r`, `--showlocals`, `--strict-markers`, `--rootdir`, `--fixtures`, `--markers`, `--setup-show`, `--cache-clear`, `--lf`, `--ff`, `-p`
+- ✅ Sistema de caché (`--lf`/`--last-failed`, `--ff`/`--failed-first`, `--cache-clear`)
+- ✅ Expresiones de palabras clave (`-k "not slow and (math or api)"`)
+- ✅ Cobertura de código integrada (`--cov`, `--cov-report`, `--cov-branch`, `--cov-fail-under`)
+- ✅ Depurador post-mortem (`--pdb`) y ejecución traza (`--trace`)
+- ✅ Integración con VSCode (JSON-RPC 2.0 sobre pipe nominal, auto-detectado)
+- ✅ Configuración via `pyproject.toml` (sección `[tool.oxytest]`)
+- ✅ Flags CLI: `-v`, `-q`, `-x`, `-k`, `--tb`, `-n`, `--junitxml`, `-s`, `--maxfail`, `--ignore`, `--collect-only`, `--durations`, `-r`, `--showlocals`, `--strict-markers`, `--rootdir`, `--fixtures`, `--markers`, `--setup-show`, `--cache-clear`, `--lf`, `--ff`, `-p`, `--cov`, `--cov-report`, `--cov-branch`, `--cov-fail-under`, `--cov-append`, `--pdb`, `--trace`

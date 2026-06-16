@@ -68,14 +68,11 @@ cargo build --release
 ## Testing
 
 ```bash
-# Run sample tests (30 tests, all should pass)
+# Run sample tests (30 tests, 9 expected failures)
 oxytest tests/sample_tests/ -v
 
-# Run oxytest's own test suite (39 tests, all should pass)
-python -m pytest tests/ -v --ignore=tests/sample_tests
-
-# Run both together
-python -m pytest tests/ -v
+# Run oxytest's own test suite
+uv run python -m oxytest tests/ -v --tb=no
 
 # Run Rust tests
 cargo test

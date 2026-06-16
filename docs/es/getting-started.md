@@ -4,6 +4,9 @@
 
 ```bash
 pip install oxytest
+
+# Para soporte de cobertura
+pip install oxytest[cov]
 ```
 
 ## Uso
@@ -40,11 +43,43 @@ Detener en el primer fallo:
 oxytest -x
 ```
 
-Filtrar por palabra clave:
+Filtrar por palabra clave (soporta `and`, `or`, `not`, paréntesis):
 
 ```bash
 oxytest -k "math or string"
+oxytest -k "not slow and (math or api)"
 ```
+
+Medir cobertura de código:
+
+```bash
+oxytest --cov=src/ --cov-report=html
+```
+
+Depurar fallos:
+
+```bash
+oxytest --pdb          # depurador post-mortem
+oxytest --trace        # depurador antes de cada test
+```
+
+### Configuración via pyproject.toml
+
+Crea un archivo `pyproject.toml` en la raíz de tu proyecto:
+
+```toml
+[tool.oxytest]
+addopts = "-v --tb=short"
+testpaths = ["tests/"]
+ignore = ["tests/legacy/"]
+markers = ["slow: marks slow tests"]
+cov_source = "src/"
+cov_report = "html"
+```
+
+### Integración con VSCode
+
+Oxytest incluye un plugin integrado para VSCode — no necesita configuración adicional. Solo activa `"python.testing.pytestEnabled": true` en los ajustes de VSCode.
 
 ### Como Reemplazo de pytest
 

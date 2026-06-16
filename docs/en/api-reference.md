@@ -282,6 +282,14 @@ oxytest migrate src/ --check
 | `--cache-clear` | Clear cache before run |
 | `--lf`, `--last-failed` | Run only previously failed tests |
 | `--ff`, `--failed-first` | Run failed tests first |
+| `--pdb` | Drop into debugger on failure |
+| `--trace` | Drop into debugger before each test |
+| `--cov[=SOURCE]` | Measure code coverage |
+| `--cov-report=TYPE` | Coverage report type (term, html, xml) |
+| `--cov-config=FILE` | Config file for coverage |
+| `--cov-branch` | Enable branch coverage |
+| `--cov-fail-under=N` | Fail if coverage below N% |
+| `--cov-append` | Append to existing coverage data |
 | `--version` | Show version |
 | `-h`, `--help` | Show help |
 
@@ -291,3 +299,5 @@ oxytest migrate src/ --check
 |------|---------|
 | 0 | All tests passed |
 | 1 | Some tests failed |
+| 2 | Test execution error |
+| 4 | No tests collected |

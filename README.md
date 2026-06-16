@@ -60,11 +60,29 @@ oxytest --setup-show
 # Run only previously failed tests
 oxytest --lf
 
+# Filter with keyword expressions
+oxytest -k "not slow and (math or user)"
+
 # Show slowest tests
 oxytest --durations 5
 
 # Full summary
 oxytest -rA
+
+# Measure coverage
+oxytest --cov=src/ --cov-report=html
+
+# Drop into debugger on failure
+oxytest --pdb
+
+# Trace execution (pdb on every test)
+oxytest --trace
+
+# Configure via pyproject.toml
+cat pyproject.toml
+# [tool.oxytest]
+# addopts = "-v --tb=short"
+# testpaths = ["tests/"]
 
 # Migrate imports from pytest to oxytest
 oxytest migrate src/ --dry-run
@@ -97,6 +115,45 @@ from oxytest import hookimpl
 def pytest_addoption(parser):
     parser.addoption("--my-flag", action="store_true")
 ```
+
+## Coverage
+
+oxytest integrates with [coverage.py](https://coverage.readthedocs.io/) for code coverage measurement.
+
+### Zero-config approach
+
+```bash
+pip install coverage
+coverage run --source=. -m oxytest
+coverage report -m
+coverage html  # open htmlcov/index.html
+```
+
+### Built-in `--cov` flag
+
+```bash
+pip install oxytest[cov]   # or: pip install coverage
+
+oxytest --cov=src/                  # terminal report
+oxytest --cov=src/ --cov-report=html  # HTML report
+oxytest --cov=src/ --cov-branch      # branch coverage
+oxytest --cov=src/ --cov-fail-under=80  # enforce min coverage
+```
+
+Flags: `--cov[=SOURCE]`, `--cov-report=term|html|xml`, `--cov-config=FILE`, `--cov-branch`, `--cov-fail-under=N`, `--cov-append`.
+
+## VSCode Compatibility
+
+oxytest includes a built-in plugin that speaks the VSCode Python extension's test protocol via JSON-RPC 2.0. When VSCode runs `-p vscode_pytest`, oxytest auto-loads its own implementation — no extra dependencies needed.
+
+**Supported features:**
+- Test discovery (tree with folder/file/class/test nodes)
+- Real-time execution results (pass/fail/skip/error)
+- Per-test tracebacks and messages
+- Parametrized test support
+- Coverage integration (if `COVERAGE_ENABLED=True`)
+
+No configuration needed — just set `"python.testing.pytestEnabled": true` in VSCode and install oxytest in your environment.
 
 ## Benchmarks
 
