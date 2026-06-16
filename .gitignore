@@ -26,3 +26,9 @@ benchmark_tests/
 
 # Tests
 .pytest_cache/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage/

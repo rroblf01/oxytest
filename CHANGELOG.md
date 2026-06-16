@@ -1,8 +1,13 @@
 # Changelog
 
-## [1.0.0] - 2026-06-14
+## [2.0.0] - 2026-06-16
 
 ### Added
+- **Coverage support**: `--cov[=SOURCE]`, `--cov-report`, `--cov-config`, `--cov-branch`, `--cov-fail-under`, `--cov-append`. Coverage.py is an optional dependency (`pip install oxytest[cov]`). Also documented `coverage run -m oxytest` for zero-config usage.
+- **VSCode compatibility**: Built-in `_vscode.py` plugin that implements the JSON-RPC 2.0 protocol over named pipes. Activated automatically when VSCode runs `-p vscode_pytest`. Supports test discovery (tree with folder/file/class/test nodes) and real-time execution results.
+- **Boolean keyword expressions**: `-k "not slow and (test_user or test_api)"` now works with `and`, `or`, `not`, and parentheses. Evaluates against test name and markers.
+- **pyproject.toml configuration**: oxytest reads `[tool.oxytest]` section for `addopts`, `testpaths`, `ignore`, and `markers`. CLI flags take precedence.
+- **`--pdb` / `--trace`**: Drop into the debugger on test failure (`--pdb`) or before each test (`--trace`).
 - **Phase 1 - Bug fixes**: `-n auto`, `--tb=value` parsing, yield fixture teardown, `autouse=True`, `usefixtures` on classes, `capsys.stop()` on cleanup.
 - **Phase 2 - Plugin system**: pluggy-based plugin system with `hookimpl`/`hookspec`, `Config`, `Parser`, `PluginManager`, conftest plugin loading, entry point plugins (`pytest11`), `-p PLUGIN` flag.
 - **Phase 3 - Core features**:
