@@ -1922,6 +1922,15 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 instance.tearDown()
             except Exception:
                 pass
+        # Clean up test modules from sys.modules to prevent cross-test contamination
+        import sys as _sys_cleanup
+        _test_module_prefixes = ("tests.", "test_", "pydantic_core.")
+        _keys_to_remove = [
+            k for k in _sys_cleanup.modules
+            if any(k.startswith(p) for p in _test_module_prefixes)
+        ]
+        for k in _keys_to_remove:
+            _sys_cleanup.modules.pop(k, None)
 
 
 def _expand_parametrize(tests: list) -> list:
