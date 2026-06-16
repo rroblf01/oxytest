@@ -13,9 +13,7 @@ Generates synthetic test suites of varying sizes.
 import os
 import sys
 import time
-import tempfile
 import argparse
-import subprocess
 import statistics
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -113,7 +111,6 @@ def benchmark_execution(suite_dir: str, num_workers: int, warmup: bool = True) -
 def benchmark_pytest_execution(suite_dir: str) -> dict:
     """Benchmark pytest execution time."""
     import subprocess
-    import json
 
     times = []
     for _ in range(3):

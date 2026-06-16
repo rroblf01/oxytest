@@ -45,7 +45,7 @@ def make_asserts(rng: random.Random, n: int = 3) -> list[str]:
     opts.append(f"assert dict({k}={v}).get('{k}') == {v}")
     opts.append(f"assert str({a} + {b}) == '{a + b}'")
     opts.append(f"assert isinstance({a}, int)")
-    a2, b2 = rng.randint(1, 20), rng.randint(1, 20)
+    a2 = rng.randint(1, 20)
     opts.append(f"assert pow({a2}, 2) == {a2 * a2}")
     return opts[:n]
 

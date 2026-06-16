@@ -1,7 +1,5 @@
 import ast
 import sys
-import os
-import types
 
 
 def _format_assert_detail(test_val):

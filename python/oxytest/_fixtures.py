@@ -22,7 +22,7 @@ class FixtureDef:
         self.scope = scope
         self.params = params
         self.autouse = autouse
-        self.name = name or func.__name__
+        self.name = name or getattr(func, "__name__", str(func))
         self.cached_value = None
         self.cached_scope = None
 
@@ -59,7 +59,7 @@ class FixtureManager:
 
     def register(self, func: Callable):
         if hasattr(func, "_oxytest_fixture"):
-            meta = func._oxytest_fixture
+            meta: dict[str, Any] = func._oxytest_fixture
             self._fixtures[meta["name"]] = FixtureDef(
                 func,
                 scope=meta["scope"],
@@ -101,7 +101,7 @@ class FixtureManager:
                 }
                 self.register(wrapped)
 
-    def resolve(self, name: str, scope: str = "function", _resolving: set = None) -> Any:
+    def resolve(self, name: str, scope: str = "function", _resolving: Optional[set] = None) -> Any:
         if _resolving is None:
             _resolving = set()
         if name in _resolving:
@@ -112,7 +112,7 @@ class FixtureManager:
         finally:
             _resolving.discard(name)
 
-    def _resolve_impl(self, name: str, scope: str = "function", _resolving: set = None) -> Any:
+    def _resolve_impl(self, name: str, scope: str = "function", _resolving: Optional[set] = None) -> Any:
         setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
         if setup_show:
             os.write(2, f"SETUP    {name}\n".encode())
@@ -178,7 +178,7 @@ class FixtureManager:
                 os.write(2, f"  TEARDOWN {name} (yield)\n".encode())
             value = yielded
 
-        if hasattr(value, "start"):
+        if hasattr(value, "start") and callable(value.start):
             value.start()
 
         if fdef.scope in ("session", "module", "class"):
@@ -326,7 +326,6 @@ class MockerFixture:
         return _mock.MagicMock(name=name, spec=_mock.MagicMock)
 
     def spy(self, obj, name):
-        import unittest.mock as _mock
         orig = getattr(obj, name)
         def _spy(*args, **kwargs):
             _spy.spy_return = None

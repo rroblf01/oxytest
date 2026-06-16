@@ -1,3 +1,4 @@
+import enum
 import os
 import re
 import sys
@@ -6,6 +7,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from typing import (
     Any,
+    Callable,
     ContextManager,
     Dict,
     List,
@@ -153,7 +155,7 @@ def raises(
     *args,
     match: Optional[str] = None,
     check: Optional[Callable] = None,
-) -> Union[RaisesContext, ContextManager]:
+) -> Optional[Union[RaisesContext, ContextManager]]:
     if args:
         func = args[0]
         try:
@@ -166,11 +168,6 @@ def raises(
     return ctx
 
 
-class PytestDeprecationWarning(FutureWarning):
-    """Warning for deprecated pytest features."""
-
-
-import enum
 class ExitCode(enum.IntEnum):
     OK = 0
     TESTS_FAILED = 1
@@ -357,7 +354,7 @@ mark = Mark()
 
 
 def param(*values, marks=None, id: Optional[str] = None):
-    result = {"values": values}
+    result: dict[str, object] = {"values": values}
     if marks:
         result["marks"] = marks if isinstance(marks, (list, tuple)) else [marks]
     if id is not None:
@@ -428,27 +425,27 @@ class TempPathFactory:
 
 
 def fixture(
-    scope: str = "function",
+    scope: Union[str, Callable[..., Any]] = "function",
     params: Optional[list] = None,
     autouse: bool = False,
     name: Optional[str] = None,
     ids: Optional[list] = None,
 ):
     if callable(scope):
-        func = scope
+        func: Callable[..., Any] = scope
         func._oxytest_fixture = {
             "scope": "function",
             "params": None,
             "autouse": False,
-            "name": func.__name__,
+            "name": getattr(func, "__name__", str(func)),
         }
         return func
-    def decorator(func):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         func._oxytest_fixture = {
             "scope": scope,
             "params": params,
             "autouse": autouse,
-            "name": name or func.__name__,
+            "name": name or getattr(func, "__name__", str(func)),
         }
         return func
     return decorator
@@ -726,7 +723,13 @@ class _ConfigStash:
                 from _pytest.assertion.rewrite import assertstate_key
                 if key is assertstate_key:
                     from _pytest.assertion import AssertionState
-                    value = AssertionState(object(), "rewrite")
+                    class _FakeConfig:
+                        class _Trace:
+                            class _Root:
+                                def get(self, name: str) -> None: return None
+                            root = _Root()
+                        trace = _Trace()
+                    value = AssertionState(_FakeConfig(), "rewrite")
                     self._data[key] = value
                     return value
             except Exception:
@@ -743,27 +746,24 @@ class _ConfigStash:
     def get(self, key, default=None):
         if key in self._data:
             return self._data[key]
-        self._data[key] = {}
-        return self._data[key]
-
-    def __setitem__(self, key, value):
-        self._data[key] = value
-
-    def __contains__(self, key):
-        return key in self._data
-
-    def get(self, key, default=None):
-        if key in self._data:
-            return self._data[key]
         if "assertstate" in str(key).lower() or "assertion" in str(key).lower():
-            from _pytest.assertion import AssertionState
-            self._data[key] = AssertionState({}, False, False)
+            try:
+                from _pytest.assertion import AssertionState
+                class _FakeConfig:
+                    class _Trace:
+                        class _Root:
+                            def get(self, name: str) -> None: return None
+                        root = _Root()
+                    trace = _Trace()
+                self._data[key] = AssertionState(_FakeConfig(), "rewrite")
+            except Exception:
+                self._data[key] = {}
         else:
             self._data[key] = {}
         return self._data[key]
 
 
-def _parse_args(args: List[str]) -> dict:
+def _parse_args(args: List[str]) -> dict[str, object]:
     parsed = {
         "paths": [],
         "verbose": False,
