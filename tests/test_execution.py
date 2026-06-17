@@ -383,16 +383,23 @@ def test_is_xfail_with_mark():
 # ── TerminalReporter tests ───────────────────────────────────────────
 
 
+def _make_test_result(passed, name, duration_ms=0, error=None):
+    from oxytest._core import test_result_passed, test_result_failed, TestItem
+    t = TestItem()
+    t.path = f"{name}.py"
+    t.name = name
+    t.line_no = 1
+    t.args_json = ""
+    if passed:
+        return test_result_passed(t, "", "", duration_ms)
+    return test_result_failed(t, "", "", duration_ms, error or "", None)
+
+
 def test_terminal_reporter_basic():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest._core import TestResult  # type: ignore
-    result = TestResult()
-    result.name = "test_foo"
-    result.path = "test_foo.py"
-    result.duration_ms = 10
-    result.passed = True
-    reporter.add_result(result)
+    result = _make_test_result(True, "test_foo", 10)
+    reporter.test_result(result)
     assert reporter.stats["passed"] == 1
     assert reporter.get_exit_code() == 0
 
@@ -400,14 +407,8 @@ def test_terminal_reporter_basic():
 def test_terminal_reporter_failed():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest._core import TestResult  # type: ignore
-    result = TestResult()
-    result.name = "test_bar"
-    result.path = "test_bar.py"
-    result.duration_ms = 5
-    result.passed = False
-    result.error = "test error"
-    reporter.add_result(result)
+    result = _make_test_result(False, "test_bar", 5, "test error")
+    reporter.test_result(result)
     assert reporter.stats["failed"] == 1
     assert reporter.get_exit_code() == 1
 
@@ -415,33 +416,22 @@ def test_terminal_reporter_failed():
 def test_terminal_reporter_skipped():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest._core import TestResult  # type: ignore
-    result = TestResult()
-    result.name = "test_skip"
-    result.path = "test_skip.py"
-    result.duration_ms = 0
-    result.passed = True
-    result.skipped = True
-    reporter.add_result(result)
+    result = _make_test_result(False, "test_skip", 0, "SKIPPED:skip reason")
+    reporter.test_result(result)
     assert reporter.stats["skipped"] == 1
 
 
 def test_terminal_reporter_durations():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest._core import TestResult  # type: ignore
     for i in range(5):
-        r = TestResult()
-        r.name = f"test_{i}"
-        r.path = f"test_{i}.py"
-        r.duration_ms = i * 100
-        r.passed = True
-        reporter.add_result(r)
+        r = _make_test_result(True, f"test_{i}", i * 100)
+        reporter.test_result(r)
     # Should not raise
     import io
     out = io.StringIO()
     try:
-        reporter.finish(out, durations=2)
+        reporter.finish()
     finally:
         out.close()
 

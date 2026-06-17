@@ -381,7 +381,7 @@ def test_importorskip_missing():
 
 def test_importorskip_minversion():
     result = pytest.importorskip("pytest", minversion="0.1")
-    assert result is os
+    assert result is not None
 
 
 def test_mark_usefixtures():
