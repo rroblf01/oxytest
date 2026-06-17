@@ -4,6 +4,9 @@ use rayon::prelude::*;
 use std::path::Path;
 
 fn is_test_file(filename: &str) -> bool {
+    if !filename.ends_with(".py") {
+        return false;
+    }
     let name = filename.strip_suffix(".py").unwrap_or(filename);
     name.starts_with("test") || name.ends_with("_test")
 }

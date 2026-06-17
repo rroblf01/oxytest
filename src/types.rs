@@ -70,6 +70,39 @@ impl TestResult {
     }
 }
 
+#[pyfunction]
+pub fn test_result_passed(test: TestItem, output: String, error_output: String, duration_ms: u64) -> TestResult {
+    TestResult {
+        test,
+        passed: true,
+        output,
+        error_output,
+        duration_ms,
+        error: None,
+        traceback: None,
+    }
+}
+
+#[pyfunction]
+pub fn test_result_failed(
+    test: TestItem,
+    output: String,
+    error_output: String,
+    duration_ms: u64,
+    error: String,
+    traceback: Option<String>,
+) -> TestResult {
+    TestResult {
+        test,
+        passed: false,
+        output,
+        error_output,
+        duration_ms,
+        error: Some(error),
+        traceback,
+    }
+}
+
 impl TestResult {
     pub fn passed(test: TestItem, output: String, error_output: String, duration_ms: u64) -> Self {
         TestResult {
