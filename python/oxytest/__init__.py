@@ -1,4 +1,5 @@
 from oxytest._core import discover_tests, run_tests, run_tests_sequential, TestItem, TestResult
+from oxytest._assert import register_assert_rewrite
 from oxytest._compat import (
     main,
     approx,
@@ -85,6 +86,7 @@ __all__ = [
     "ExitCode",
     "warns",
     "deprecated_call",
+    "register_assert_rewrite",
     "RaisesContext",
     "__version__",
 ]

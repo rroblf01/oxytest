@@ -62,6 +62,22 @@ def pytest_runtest_call(item: Any):
     """Called for each test item (before the actual test call)."""
 
 
+@_hook_spec
+def pytest_runtest_setup(item: Any):
+    """Called to set up fixtures for a test item."""
+
+
+@_hook_spec
+def pytest_runtest_teardown(item: Any, nextitem: Any = None):
+    """Called to tear down fixtures for a test item."""
+
+
+@_hook_spec
+def pytest_runtest_protocol(item: Any, nextitem: Any = None):
+    """Called to implement the complete runtest protocol for a test item.
+    Returns True if no further processing should happen."""
+
+
 # ---------------------------------------------------------------------------
 # Plugin manager
 # ---------------------------------------------------------------------------
@@ -95,7 +111,10 @@ class PluginManager:
            hasattr(module, "pytest_sessionstart") or \
            hasattr(module, "pytest_sessionfinish") or \
            hasattr(module, "pytest_collection_modifyitems") or \
-           hasattr(module, "pytest_runtest_call"):
+           hasattr(module, "pytest_runtest_call") or \
+           hasattr(module, "pytest_runtest_setup") or \
+           hasattr(module, "pytest_runtest_teardown") or \
+           hasattr(module, "pytest_runtest_protocol"):
             self.register(module, name=f"conftest:{path}")
             return True
         return False
@@ -185,6 +204,9 @@ __all__ = [
     "pytest_sessionfinish",
     "pytest_collection_modifyitems",
     "pytest_runtest_call",
+    "pytest_runtest_setup",
+    "pytest_runtest_teardown",
+    "pytest_runtest_protocol",
     "HookimplMarker",
     "HookspecMarker",
 ]

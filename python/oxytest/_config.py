@@ -1,28 +1,67 @@
 import os
 import importlib
+import configparser
 
 
 def load_config(path=None):
     if path is None:
         path = _find_pyproject_toml()
-    if path is None or not os.path.isfile(path):
-        return {}
-    tomllib = None
-    for mod_name in ("tomllib", "tomli"):
-        try:
-            tomllib = importlib.import_module(mod_name)
-            break
-        except ImportError:
-            continue
-    if tomllib is None:
-        return {}
-    try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-    except Exception:
-        return {}
-    tool_oxytest = data.get("tool", {}).get("oxytest", {})
-    return tool_oxytest
+    result = {}
+    if path and os.path.isfile(path):
+        tomllib = None
+        for mod_name in ("tomllib", "tomli"):
+            try:
+                tomllib = importlib.import_module(mod_name)
+                break
+            except ImportError:
+                continue
+        if tomllib is not None:
+            try:
+                with open(path, "rb") as f:
+                    data = tomllib.load(f)
+            except Exception:
+                data = {}
+            tool_oxytest = data.get("tool", {}).get("oxytest", {})
+            if tool_oxytest:
+                result.update(tool_oxytest)
+    # Also read pytest.ini / setup.cfg / tox.ini
+    ini_config = _read_ini_config()
+    result = _merge_ini_config(result, ini_config)
+    return result
+
+
+def _read_ini_config():
+    """Read pytest config from pytest.ini, setup.cfg, or tox.ini."""
+    parser = configparser.ConfigParser()
+    candidates = ["pytest.ini", "setup.cfg", "tox.ini"]
+    for fname in candidates:
+        path = os.path.join(os.getcwd(), fname)
+        if os.path.isfile(path):
+            parser.read(path)
+            for section in ("pytest", "tool:pytest"):
+                if parser.has_section(section):
+                    return dict(parser[section])
+    return {}
+
+
+def _merge_ini_config(ini_data, result):
+    """Merge INI config values into the result dict."""
+    if "addopts" in ini_data:
+        result.setdefault("addopts", ini_data["addopts"])
+    if "testpaths" in ini_data:
+        result.setdefault("testpaths", ini_data["testpaths"].split())
+    if "markers" in ini_data:
+        markers = result.setdefault("_extra_markers", [])
+        markers.extend(ini_data["markers"].split("\n"))
+    if "filterwarnings" in ini_data:
+        result.setdefault("filterwarnings", ini_data["filterwarnings"].split("\n"))
+    if "ignore" in ini_data:
+        result.setdefault("ignore", [])
+        result["ignore"].extend(ini_data["ignore"].split())
+    if "norecursedirs" in ini_data:
+        result.setdefault("ignore", [])
+        result["ignore"].extend(ini_data["norecursedirs"].split())
+    return result
 
 
 def _find_pyproject_toml():
@@ -32,9 +71,9 @@ def _find_pyproject_toml():
         return path
     parent = os.path.dirname(cwd)
     if parent and parent != cwd:
-        path = os.path.join(cwd, "pyproject.toml")
-        if os.path.isfile(path):
-            return path
+        parent_path = os.path.join(parent, "pyproject.toml")
+        if os.path.isfile(parent_path):
+            return parent_path
     return None
 
 
