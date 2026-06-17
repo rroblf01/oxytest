@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import threading
+import pathlib
 import xml.etree.ElementTree as ET
 from decimal import Decimal
 from datetime import datetime, timedelta as Timedelta
@@ -792,6 +793,25 @@ class Config:
         self._benchmarksession = None
         self.trace = _TraceStub()
 
+    @property
+    def rootpath(self) -> Optional[pathlib.Path]:
+        if self.rootdir:
+            return pathlib.Path(self.rootdir)
+        return None
+
+    @property
+    def hook(self):
+        from oxytest._plugin import get_plugin_manager
+        return get_plugin_manager().hook
+
+    @property
+    def cache(self):
+        from oxytest._fixtures import get_fixture_manager
+        fm = get_fixture_manager()
+        if 'cache' in fm._fixtures:
+            return fm._fixtures['cache'].func()
+        return None
+
     def getoption(self, name: str, default=None):
         return self._opts.get(name, default)
 
@@ -1246,6 +1266,8 @@ def _run_tests(
     cov_plugin=None,
     confcutdir: Optional[str] = None,
     no_header: bool = False,
+    import_mode: str = "append",
+    capture: Optional[str] = None,
 ) -> int:
     pm = None
     if config is not None:
@@ -1269,7 +1291,10 @@ def _run_tests(
     global _original_cwd
     _original_cwd = _cwd
     if _cwd not in _sys.path:
-        _sys.path.append(_cwd)
+        if import_mode == "prepend":
+            _sys.path.insert(0, _cwd)
+        else:
+            _sys.path.append(_cwd)
 
     # Remove tests/ subdirectories from sys.path to prevent package shadowing
     _shadow_candidates = [
@@ -1372,6 +1397,10 @@ def _run_tests(
             print(f"Running {len(lf_tests)} previously failed test(s)")
         elif verbose and ff:
             print(f"Running {len(lf_tests)} failed + {len(passed_tests)} passed")
+
+    # Apply --capture=method (override nocapture flag)
+    if capture == "no":
+        nocapture = True
 
     if num_workers is None or num_workers == 1:
         results = run_tests_sequential(all_tests, nocapture=nocapture)
@@ -1845,6 +1874,8 @@ def main(args: Optional[List[str]] = None) -> int:
         cov_plugin=cov_plugin,
         confcutdir=opts.get("confcutdir", None),
         no_header=opts.get("no_header", False),
+        import_mode=opts.get("import_mode", "append"),
+        capture=opts.get("capture", None),
     )
 
     if cov_plugin:

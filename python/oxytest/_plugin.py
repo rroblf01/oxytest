@@ -103,6 +103,46 @@ def pytest_load_initial_conftests(early_config: Any) -> None:
     """Called before conftest files are loaded."""
 
 
+@_hook_spec
+def pytest_collect_module(file_path: Any, path: Any) -> Any:
+    """Called when collecting a test module."""
+
+
+@_hook_spec
+def pytest_make_parametrize_id(config: Any, val: Any, argname: str) -> Any:
+    """Called to generate a parametrize ID for a given value."""
+
+
+@_hook_spec
+def pytest_runtest_makereport(item: Any, call: Any) -> Any:
+    """Called to create a test report for an item."""
+
+
+@_hook_spec
+def pytest_report_header(config: Any) -> Any:
+    """Called to add extra lines to the terminal report header."""
+
+
+@_hook_spec
+def pytest_report_teststatus(report: Any, config: Any) -> Any:
+    """Called to determine the short test status label."""
+
+
+@_hook_spec
+def pytest_exception_interact(node: Any, call: Any, report: Any) -> None:
+    """Called when an exception needs interaction (e.g., --pdb)."""
+
+
+@_hook_spec
+def pytest_enter_pdb(**kwargs: Any) -> None:
+    """Called when entering pdb."""
+
+
+@_hook_spec
+def pytest_leave_pdb(**kwargs: Any) -> None:
+    """Called when leaving pdb."""
+
+
 # ---------------------------------------------------------------------------
 # Plugin manager
 # ---------------------------------------------------------------------------
@@ -136,10 +176,18 @@ class PluginManager:
            hasattr(module, "pytest_sessionstart") or \
            hasattr(module, "pytest_sessionfinish") or \
            hasattr(module, "pytest_collection_modifyitems") or \
+           hasattr(module, "pytest_collect_module") or \
+           hasattr(module, "pytest_make_parametrize_id") or \
            hasattr(module, "pytest_runtest_call") or \
            hasattr(module, "pytest_runtest_setup") or \
            hasattr(module, "pytest_runtest_teardown") or \
-           hasattr(module, "pytest_runtest_protocol"):
+           hasattr(module, "pytest_runtest_protocol") or \
+           hasattr(module, "pytest_runtest_makereport") or \
+           hasattr(module, "pytest_report_header") or \
+           hasattr(module, "pytest_report_teststatus") or \
+           hasattr(module, "pytest_exception_interact") or \
+           hasattr(module, "pytest_enter_pdb") or \
+           hasattr(module, "pytest_leave_pdb"):
             self.register(module, name=f"conftest:{path}")
             return True
         return False
@@ -228,10 +276,18 @@ __all__ = [
     "pytest_sessionstart",
     "pytest_sessionfinish",
     "pytest_collection_modifyitems",
+    "pytest_collect_module",
+    "pytest_make_parametrize_id",
     "pytest_runtest_call",
     "pytest_runtest_setup",
     "pytest_runtest_teardown",
     "pytest_runtest_protocol",
+    "pytest_runtest_makereport",
+    "pytest_report_header",
+    "pytest_report_teststatus",
+    "pytest_exception_interact",
+    "pytest_enter_pdb",
+    "pytest_leave_pdb",
     "HookimplMarker",
     "HookspecMarker",
 ]
