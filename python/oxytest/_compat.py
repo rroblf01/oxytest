@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+import threading
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from typing import (
@@ -17,8 +18,11 @@ from typing import (
     Union,
 )
 
-from oxytest._core import discover_tests, run_tests, run_tests_sequential, TestItem, TestResult
+from oxytest._core import discover_tests, run_tests_sequential, TestItem, TestResult
 from oxytest._config import load_config, merge_config_with_opts
+import importlib.util
+import inspect
+import json
 
 
 Exit = SystemExit
@@ -40,6 +44,28 @@ class SkipTest(Exception):
 
 class Failed(Exception):
     pass
+
+
+class _RuntestItem:
+    """Lightweight wrapper around a test item for hook invocation."""
+    def __init__(self, path, name, func, cls=None, instance=None):
+        self.path = path
+        self.name = name
+        self.nodeid = f"{path}::{name}" if "::" not in name else name
+        self.func = func
+        self._cls = cls
+        self._instance = instance
+        self.fixturenames = []
+        self._request = None
+        self.callspec = None
+
+    def getparent(self, cls):
+        return None
+
+    @property
+    def config(self):
+        from oxytest._fixtures import get_fixture_manager
+        return getattr(get_fixture_manager(), '_config', None)
 
 
 class ApproxDecimal:
@@ -691,6 +717,7 @@ class Config:
         self.plugin_options: dict = {}
         self._inicfg: dict = {}
         self.rootdir = opts.get("rootdir", None)
+        self.basetemp = opts.get("basetemp", None)
         self._stash_data: dict = {}
         self._benchmarksession = None
         self.trace = _TraceStub()
@@ -786,6 +813,12 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
     "showlocals": False,
     "strict_markers": False,
     "rootdir": None,
+    "override_ini": None,
+    "confcutdir": None,
+    "basetemp": None,
+    "runxfail": False,
+    "strict_config": False,
+    "plugin": None,
     "fixtures_list": False,
     "markers_list": False,
     "setup_show": False,
@@ -814,6 +847,9 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         elif arg == "-k" and i + 1 < len(args):
             i += 1
             parsed["keyword"] = args[i]
+        elif arg == "-m" and i + 1 < len(args):
+            i += 1
+            parsed["marker_expr"] = args[i]
         elif arg.startswith("--tb="):
             parsed["tb_style"] = arg[5:]
         elif arg == "--tb" and i + 1 < len(args):
@@ -873,6 +909,19 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         elif arg == "--trace":
             parsed["trace"] = True
             parsed["pdb"] = True
+        elif arg == "--override-ini" and i + 1 < len(args):
+            i += 1
+            parsed["override_ini"] = args[i]
+        elif arg == "--confcutdir" and i + 1 < len(args):
+            i += 1
+            parsed["confcutdir"] = args[i]
+        elif arg == "--runxfail":
+            parsed["runxfail"] = True
+        elif arg == "--strict-config":
+            parsed["strict_config"] = True
+        elif arg == "--basetemp" and i + 1 < len(args):
+            i += 1
+            parsed["basetemp"] = args[i]
         elif arg == "--cov":
             if i + 1 < len(args) and not args[i + 1].startswith("-"):
                 i += 1
@@ -1013,6 +1062,36 @@ def _filter_keyword_expression(tests, expr):
     return filtered
 
 
+def _filter_marker_expression(tests, expr):
+    """Filter tests by marker expression (-m flag).
+    Reuses the keyword expression parser (supports and/or/not/parens)."""
+    if not expr:
+        return tests
+    tokens = _parse_keyword_expression(expr)
+    filtered = []
+    for t in tests:
+        mod = None
+        try:
+            mod = _get_test_module(t.path)
+        except Exception:
+            mod = None
+        markers = []
+        if mod:
+            mod_marks = getattr(mod, "pytestmark", None)
+            if mod_marks:
+                for m in (mod_marks if isinstance(mod_marks, (list, tuple)) else [mod_marks]):
+                    if hasattr(m, "name"):
+                        markers.append(m.name)
+            func_name = t.name.split("[")[0].split("::")[-1] if "::" in t.name else t.name.split("[")[0]
+            func = getattr(mod, func_name, None)
+            if func:
+                for mark_name, _, _ in getattr(func, "_oxytest_marks", []):
+                    markers.append(mark_name)
+        if _eval_keyword_expression(tokens, t.path + "::" + t.name, markers):
+            filtered.append(t)
+    return filtered
+
+
 def _run_tests(
     paths: List[str],
     verbose: bool = False,
@@ -1040,6 +1119,7 @@ def _run_tests(
     ff: bool = False,
     pdb: bool = False,
     trace: bool = False,
+    marker_expr: Optional[str] = None,
     cov_plugin=None,
 ) -> int:
     pm = None
@@ -1089,6 +1169,8 @@ def _run_tests(
 
     if has_expr:
         all_tests = _filter_keyword_expression(all_tests, keyword)
+    if marker_expr:
+        all_tests = _filter_marker_expression(all_tests, marker_expr)
 
     if not all_tests:
         if not collect_only:
@@ -1161,7 +1243,8 @@ def _run_tests(
     if num_workers is None or num_workers == 1:
         results = run_tests_sequential(all_tests, nocapture=nocapture)
     else:
-        results = run_tests(all_tests, num_workers, nocapture=nocapture)
+        from oxytest._pool import run_tests_parallel
+        results = run_tests_parallel(all_tests, num_workers, nocapture=nocapture)
 
     if cov_plugin:
         cov_plugin.stop_and_save()
@@ -1202,13 +1285,18 @@ def _run_tests(
     if pm:
         pm.hook.pytest_sessionfinish(session=config, exitstatus=exitcode)
 
+    from oxytest._fixtures import get_fixture_manager
+    get_fixture_manager().cleanup_all()
+
     return exitcode
 
 
 def _is_ignored(path: str, ignore_patterns: List[str]) -> bool:
     """Check if a test path matches any ignore pattern."""
+    norm_path = os.path.normpath(path)
     for pat in ignore_patterns:
-        if path.startswith(pat) or pat in path:
+        norm_pat = os.path.normpath(pat)
+        if norm_path.startswith(norm_pat) or norm_pat in norm_path:
             return True
     return False
 
@@ -1263,7 +1351,6 @@ def _lastfailed_path() -> str:
 
 def _read_lastfailed() -> set:
     """Read set of (path, name) tuples that failed last run."""
-    import json
     lf_path = _lastfailed_path()
     if not os.path.isfile(lf_path):
         return set()
@@ -1277,7 +1364,6 @@ def _read_lastfailed() -> set:
 
 def _write_lastfailed(results):
     """Write set of (path, name) tuples that failed to cache."""
-    import json
     import os
     failed = [(r.test.path, r.test.name) for r in results if not r.passed]
     dirpath = _cache_dir()
@@ -1288,7 +1374,7 @@ def _write_lastfailed(results):
 
 def _validate_markers(tests):
     """Check that all markers are registered (stub for now)."""
-    known = {"parametrize", "skip", "skipif", "xfail", "usefixtures", "filterwarnings"}
+    known = {"parametrize", "skip", "skipif", "xfail", "usefixtures", "filterwarnings", "anyio"}
     unknown = set()
     for t in tests:
         mod = _get_test_module(t.path)
@@ -1300,6 +1386,13 @@ def _validate_markers(tests):
         if func is None:
             continue
         marks = getattr(func, "_oxytest_marks", [])
+        func_marks = getattr(func, "pytestmark", [])
+        if func_marks is not None:
+            if not isinstance(func_marks, (list, tuple)):
+                func_marks = [func_marks]
+            for m in func_marks:
+                if hasattr(m, "name") and m.name not in known:
+                    unknown.add(m.name)
         for name, _, _ in marks:
             if name not in known:
                 unknown.add(name)
@@ -1383,6 +1476,18 @@ def _summary_for_failures(reporter):
     return lines
 
 
+def _get_signature(func):
+    """Cached inspect.signature to avoid per-test overhead."""
+    sig = getattr(func, '__signature__', None)
+    if sig is None:
+        sig = inspect.signature(func)
+        try:
+            func.__signature__ = sig
+        except AttributeError:
+            pass
+    return sig
+
+
 def _get_test_module(filepath):
     """Import a module by filepath (used by _validate_markers)."""
     import importlib.util
@@ -1390,7 +1495,10 @@ def _get_test_module(filepath):
     spec = importlib.util.spec_from_file_location(module_name, filepath)
     if spec and spec.loader:
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        try:
+            spec.loader.exec_module(mod)
+        except BaseException:
+            return None
         return mod
     return None
 
@@ -1457,6 +1565,11 @@ def main(args: Optional[List[str]] = None) -> int:
     config_data = load_config()
     opts = merge_config_with_opts(config_data, opts)
 
+    # Install assert rewriting for test paths
+    paths = opts.get("paths", ["."])
+    from oxytest._assert import install_assert_rewriting
+    install_assert_rewriting(paths)
+
     if opts.get("version"):
         from oxytest import __version__
         print(f"oxytest {__version__}")
@@ -1470,6 +1583,7 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  -q, --quiet         Quiet output")
         print("  -x, --exitfirst     Exit on first failure")
         print("  -k EXPRESSION       Filter tests by keyword")
+        print("  -m EXPRESSION       Filter tests by marker expression")
         print("  --tb=style          Traceback style (short, long, native, no)")
         print("  -n WORKERS          Number of parallel workers")
         print("  --junitxml=PATH     Generate JUnit XML report")
@@ -1483,6 +1597,9 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  --showlocals        Show local variables in tracebacks")
         print("  --strict-markers    Unknown markers cause errors")
         print("  --rootdir=PATH      Set root directory for discovery")
+        print("  --override-ini=KEY=VALUE  Override ini option")
+        print("  --confcutdir=PATH   Stop searching for conftest.py at this dir")
+        print("  --basetemp=PATH     Base temporary directory for tmp_path/tmpdir")
         print("  --fixtures          List available fixtures")
         print("  --markers           List registered markers")
         print("  --setup-show        Print fixture setup/teardown")
@@ -1491,6 +1608,8 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  --ff, --failed-first Run failed tests first, then rest")
         print("  --pdb               Drop into debugger on failure")
         print("  --trace             Drop into debugger before each test")
+        print("  --runxfail          Run xfail tests (treat them as normal)")
+        print("  --strict-config     Fail on config errors")
         print("  --cov[=SOURCE]      Measure code coverage")
         print("  --cov-report=TYPE   Coverage report type (term, html, xml)")
         print("  --cov-config=FILE   Config file for coverage")
@@ -1558,6 +1677,7 @@ def main(args: Optional[List[str]] = None) -> int:
         ff=opts.get("ff", False),
         pdb=opts.get("pdb", False),
         trace=opts.get("trace", False),
+        marker_expr=opts.get("marker_expr", None),
         cov_plugin=cov_plugin,
     )
 
@@ -1584,18 +1704,26 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
             pass
 
     dirpath = os.path.abspath(root_dir) if os.path.isdir(root_dir) else os.path.dirname(os.path.abspath(root_dir))
-    seen = _conftest_seen
+    seen = getattr(_conftest_seen, 'dirs', None)
+    if seen is None:
+        seen = set()
+        _conftest_seen.dirs = seen
     while dirpath != "/" and dirpath not in seen:
         seen.add(dirpath)
         conftest_path = os.path.join(dirpath, "conftest.py")
         if os.path.isfile(conftest_path):
             module_name = os.path.relpath(conftest_path).replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
             import importlib.util
-            spec = importlib.util.spec_from_file_location(module_name, conftest_path)
+            with _import_lock:
+                if module_name in sys.modules:
+                    mod = sys.modules[module_name]
+                else:
+                    spec = importlib.util.spec_from_file_location(module_name, conftest_path)
+                    if spec and spec.loader:
+                        mod = importlib.util.module_from_spec(spec)
+                        sys.modules[module_name] = mod
+                        spec.loader.exec_module(mod)
             if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = mod
-                spec.loader.exec_module(mod)
                 fm.register_from_module(mod)
                 pm.load_conftest_plugins(mod, dirpath)
         parent = os.path.dirname(dirpath)
@@ -1606,13 +1734,16 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
 
 _module_cache: dict = {}
 _parametrize_cache: dict = {}
-_conftest_seen: set = set()
+_param_marks_cache: dict = {}
+_conftest_seen = threading.local()
+_relpath_cache: dict = {}
 
 
 def _module_cache_clear():
     _module_cache.clear()
     _parametrize_cache.clear()
-    _conftest_seen.clear()
+    if hasattr(_conftest_seen, 'dirs'):
+        _conftest_seen.dirs.clear()
     _test_full_ids.clear()
     global _original_cwd
     _original_cwd = ""
@@ -1621,6 +1752,59 @@ def _module_cache_clear():
 _import_lock = __import__('threading').Lock()
 _test_full_ids: dict = {}
 _original_cwd: str = ""
+
+
+def _parse_filterwarnings_args(raw_args):
+    """Parse pytest-style filterwarnings args into warnings.filterwarnings() format.
+    Supports:
+      - ("ignore",) → simple action
+      - ("ignore:message.*:DeprecationWarning",) → pytest colon-separated format
+      - ("ignore", "", DeprecationWarning) → already parsed
+    """
+    if not raw_args:
+        return None
+    if len(raw_args) == 1 and isinstance(raw_args[0], str) and ":" in raw_args[0]:
+        parts = raw_args[0].split(":")
+        action = parts[0].strip() if parts[0] else "always"
+        message = parts[1].strip() if len(parts) > 1 and parts[1] else None
+        category_str = parts[2].strip() if len(parts) > 2 and parts[2] else None
+        category = None
+        if category_str:
+            try:
+                import builtins as _b
+                category = getattr(_b, category_str, None)
+                if category is None:
+                    import warnings as _w
+                    for _cat_name in dir(_w):
+                        _cat = getattr(_w, _cat_name)
+                        if isinstance(_cat, type) and issubclass(_cat, Warning) and _cat.__name__ == category_str:
+                            category = _cat
+                            break
+            except Exception:
+                pass
+        args = [action]
+        kwargs = {}
+        if message:
+            kwargs["message"] = message
+        if category:
+            kwargs["category"] = category
+        return (args, kwargs)
+    args = [raw_args[0]]
+    kwargs = {}
+    if len(raw_args) > 1:
+        _cat_arg = raw_args[1]
+        if isinstance(_cat_arg, str) and _cat_arg:
+            kwargs["message"] = _cat_arg
+        elif isinstance(_cat_arg, type) and issubclass(_cat_arg, Warning):
+            kwargs["category"] = _cat_arg
+    if len(raw_args) > 2:
+        _cat_arg = raw_args[2]
+        if isinstance(_cat_arg, str) and _cat_arg:
+            if "message" not in kwargs:
+                kwargs["message"] = _cat_arg
+        elif isinstance(_cat_arg, type) and issubclass(_cat_arg, Warning):
+            kwargs["category"] = _cat_arg
+    return (args, kwargs)
 
 
 def _get_test_full_id(func) -> str:
@@ -1635,7 +1819,8 @@ def _execute_test(path: str, name: str, args_json: str):
     Raises on failure (caught by Rust runner).
     """
     import sys as _sys
-    _sys.setrecursionlimit(10000)  # Prevent RecursionError in deep schema recursion
+    if _sys.getrecursionlimit() < 10000:
+        _sys.setrecursionlimit(10000)  # Prevent RecursionError in deep schema recursion
     try:
         _execute_test_impl(path, name, args_json)
     except SkipTest as e:
@@ -1646,8 +1831,6 @@ def _execute_test(path: str, name: str, args_json: str):
 
 
 def _execute_test_impl(path: str, name: str, args_json: str):
-    import importlib.util
-    import inspect
     import sys as _sys
 
     from oxytest._fixtures import get_fixture_manager
@@ -1659,29 +1842,37 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     filepath = os.path.join(_original_cwd, path) if not os.path.isabs(path) else path
     dirpath = os.path.dirname(filepath)
 
-    with _import_lock:
-        if filepath not in _module_cache:
-            if dirpath not in _sys.path:
-                _sys.path.append(dirpath)
+    if filepath not in _module_cache:
+        with _import_lock:
+            if filepath not in _module_cache:  # double-check after lock
+                if dirpath not in _sys.path:
+                    _sys.path.append(dirpath)
 
-            # Build a dotted module name from relative path so relative imports work
-            rel_path = os.path.relpath(filepath)
-            module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
+                # Build a dotted module name from relative path so relative imports work
+                rel_path = _relpath_cache.get(filepath)
+                if rel_path is None:
+                    rel_path = os.path.relpath(filepath)
+                    _relpath_cache[filepath] = rel_path
+                module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
 
-            spec = importlib.util.spec_from_file_location(module_name, filepath)
-            if not spec or not spec.loader:
-                raise ImportError(f"Could not load spec for {path}")
-            mod = importlib.util.module_from_spec(spec)
-            _sys.modules[module_name] = mod
-            _loaded_modules.append(module_name)
-            try:
-                spec.loader.exec_module(mod)
-            except SkipTest:
-                _module_cache[filepath] = None
-                raise
-            _module_cache[filepath] = mod
-        else:
-            mod = _module_cache[filepath]
+                spec = importlib.util.spec_from_file_location(module_name, filepath)
+                if not spec or not spec.loader:
+                    raise ImportError(f"Could not load spec for {path}")
+                mod = importlib.util.module_from_spec(spec)
+                _sys.modules[module_name] = mod
+                _loaded_modules.append(module_name)
+                _ensure_parent_packages(filepath, module_name, _loaded_modules)
+                try:
+                    spec.loader.exec_module(mod)
+                except SkipTest:
+                    _module_cache[filepath] = None
+                    raise
+                except BaseException as exc:
+                    _module_cache[filepath] = None
+                    raise Exception(f"SKIPPED:module-level skip ({exc})")
+                _module_cache[filepath] = mod
+    else:
+        mod = _module_cache[filepath]
 
     if mod is None:
         raise Exception("SKIPPED:module could not be imported (dependency missing)")
@@ -1696,7 +1887,9 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     if "::" in clean_name:
         parts = clean_name.split("::")
         cls = getattr(mod, parts[0])
+        fm._current_class = parts[0]
         instance = cls()
+        fm._current_instance = instance
         # Support setUp/tearDown from unittest.TestCase
         if hasattr(instance, "setUp"):
             instance.setUp()
@@ -1708,7 +1901,6 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     _set_test_full_id(func, name)
 
     # 3. Parse parametrize args (match by name, not position)
-    import json
     param_values = []
     param_names = []
     if args_json:
@@ -1752,59 +1944,76 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         fixture_params = all_params[len(param_values):]
 
     # Resolve fixtures for remaining parameters (in order)
-    for pname in fixture_params:
-        try:
-            if pname == "request":
-                from oxytest._compat import FixtureRequest as _FR
-                from oxytest._compat import Config as _OxyConfig
-                req = _FR(_test_func=func)
-                req._oxytest_config = getattr(fm, '_config', None) or _OxyConfig({})
-                current_param = getattr(fm, '_current_request_param', None)
-                if isinstance(current_param, dict):
-                    req.param = current_param.get("request")
-                else:
-                    req.param = getattr(fm, '_current_request_param', None)
-                val = req
-            elif cls is not None and hasattr(cls, pname):
-                # Check for class-scoped fixtures (e.g. schema_validator, core_schema)
-                cls_method = getattr(cls, pname)
-                if hasattr(cls_method, "_oxytest_fixture"):
-                    import inspect as _cls_inspect
-                    _cls_sig = _cls_inspect.signature(cls_method)
-                    _cls_args = []
-                    for _cpname, _cparam in _cls_sig.parameters.items():
-                        if _cpname == "self":
-                            _cls_args.append(instance)
-                        elif _cpname in fm._fixtures:
-                            _cls_args.append(fm.resolve(_cpname))
-                        elif cls is not None and hasattr(cls, _cpname) and hasattr(getattr(cls, _cpname), "_oxytest_fixture"):
-                            _csub = getattr(cls, _cpname)
-                            _csub_sig = _cls_inspect.signature(_csub)
-                            _csub_args = []
-                            for _cspn, _csp in _csub_sig.parameters.items():
-                                if _cspn == "self":
-                                    _csub_args.append(instance)
-                            _cls_args.append(_csub(*_csub_args))
-                    val = cls_method(*_cls_args)
+    _fixtures_resolved = []
+    try:
+        for pname in fixture_params:
+            try:
+                if pname == "request":
+                    from oxytest._compat import FixtureRequest as _FR
+                    from oxytest._compat import Config as _OxyConfig
+                    req = _FR(_test_func=func)
+                    req._oxytest_config = getattr(fm, '_config', None) or _OxyConfig({})
+                    current_param = getattr(fm, '_current_request_param', None)
+                    if isinstance(current_param, dict):
+                        req.param = current_param.get("request")
+                    else:
+                        req.param = getattr(fm, '_current_request_param', None)
+                    val = req
+                elif cls is not None and hasattr(cls, pname):
+                    cls_method = getattr(cls, pname)
+                    if hasattr(cls_method, "_oxytest_fixture"):
+                        import inspect as _cls_inspect
+                        _cls_sig = _cls_inspect.signature(cls_method)
+                        _cls_args = []
+                        for _cpname, _cparam in _cls_sig.parameters.items():
+                            if _cpname == "self":
+                                _cls_args.append(instance)
+                            elif _cpname in fm._fixtures:
+                                _cls_args.append(fm.resolve(_cpname))
+                            elif cls is not None and hasattr(cls, _cpname) and hasattr(getattr(cls, _cpname), "_oxytest_fixture"):
+                                _csub = getattr(cls, _cpname)
+                                _csub_sig = _cls_inspect.signature(_csub)
+                                _csub_args = []
+                                for _cspn, _csp in _csub_sig.parameters.items():
+                                    if _cspn == "self":
+                                        _csub_args.append(instance)
+                                _cls_args.append(_csub(*_csub_args))
+                        val = cls_method(*_cls_args)
+                    else:
+                        val = fm.resolve(pname)
                 else:
                     val = fm.resolve(pname)
-            else:
-                val = fm.resolve(pname)
-            # Find the position of this fixture in param_values and fill it
-            if pname in all_params:
-                idx = all_params.index(pname)
-                while len(param_values) <= idx:
-                    param_values.append(None)
-                param_values[idx] = val
-        except LookupError:
-            raise TypeError(
-                f"{raw_name}() missing required argument: '{pname}' "
-                f"(not provided by parametrize args or registered fixtures)"
-            )
+                _fixtures_resolved.append(pname)
+                if pname in all_params:
+                    idx = all_params.index(pname)
+                    while len(param_values) <= idx:
+                        param_values.append(None)
+                    param_values[idx] = val
+            except LookupError:
+                raise TypeError(
+                    f"{raw_name}() missing required argument: '{pname}' "
+                    f"(not provided by parametrize args or registered fixtures)"
+                )
+    except BaseException:
+        # Teardown any fixtures that were resolved before the failure
+        for _rname in reversed(_fixtures_resolved):
+            if _rname in fm._generators:
+                _rgen = fm._generators.pop(_rname, None)
+                if _rgen:
+                    try:
+                        next(_rgen)
+                    except StopIteration:
+                        pass
+                    _rgen.close()
+        raise
 
-    # 4a. Resolve autouse fixtures
-    for fname, fdef in list(fm._fixtures.items()):
-        if fdef.autouse and fname not in all_params:
+    # 4a. Resolve autouse fixtures (cached list avoids full fixture scan per test)
+    _autouse = getattr(fm, '_autouse_list', None)
+    if _autouse is None:
+        _autouse = [fn for fn, fd in fm._fixtures.items() if fd.autouse]
+        fm._autouse_list = _autouse
+    for fname in _autouse:
+        if fname not in all_params:
             try:
                 fm.resolve(fname)
             except SkipTest:
@@ -1829,14 +2038,46 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 )
 
 
-    # 4c. Check skip markers
+    # 4c. Check skip markers — apply per-param marks from pytest.param(marks=...)
+    _param_marks = _param_marks_cache.get((filepath, name), [])
+    if _param_marks:
+        if not hasattr(func, "_oxytest_marks"):
+            func._oxytest_marks = []
+        func._oxytest_marks.extend(_param_marks)
+    # Apply @pytest.mark.filterwarnings
+    _all_marks = list(getattr(func, "_oxytest_marks", []))
+    _func_pm = getattr(func, "pytestmark", None)
+    if _func_pm is not None:
+        if not isinstance(_func_pm, (list, tuple)):
+            _func_pm = [_func_pm]
+        for _m in _func_pm:
+            if hasattr(_m, "name") and hasattr(_m, "args") and hasattr(_m, "kwargs"):
+                _all_marks.append((_m.name, _m.args, _m.kwargs))
+    for _mark in _all_marks:
+        if isinstance(_mark, (list, tuple)) and len(_mark) >= 1 and _mark[0] == "filterwarnings":
+            _args = _mark[1] if len(_mark) > 1 else []
+            import warnings as _warnings_filter
+            _parsed = _parse_filterwarnings_args(_args)
+            if _parsed:
+                _warnings_filter.filterwarnings(*_parsed[0], **_parsed[1])
     skip_reason = _should_skip(func, cls=cls, mod=mod)
     if skip_reason:
         raise Exception("SKIPPED:" + str(skip_reason))
 
     xfail_reason = _is_xfail(func, cls=cls, mod=mod)
+    # --runxfail overrides xfail: run the test anyway
+    _runxfail = getattr(fm._config, 'getoption', lambda *a: False)('runxfail', False)
+    if _runxfail:
+        xfail_reason = None
 
-    # 5. Call test
+    # 5. Run test protocol with hooks
+    from oxytest._plugin import get_plugin_manager as _get_pm
+    _pm = _get_pm()
+    _runtest_item = _RuntestItem(path=filepath, name=name, func=func, cls=cls, instance=instance if cls else None)
+    _handled = _pm.hook.pytest_runtest_protocol(item=_runtest_item, nextitem=None)
+    if not _handled or not any(_handled):
+        _pm.hook.pytest_runtest_setup(item=_runtest_item)
+        _pm.hook.pytest_runtest_call(item=_runtest_item)
     try:
         if xfail_reason is not None:
             try:
@@ -1889,7 +2130,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 func()
     except SkipTest:
         raise Exception("SKIPPED:" + str(sys.exc_info()[1]))
-    except AssertionError:
+    except (AssertionError, Failed):
         if os.environ.get("OXYTEST_PDB") == "1":
             import pdb as _pdb
             _pdb.post_mortem(sys.exc_info()[2])
@@ -1928,6 +2169,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 pass
         raise
     finally:
+        _pm.hook.pytest_runtest_teardown(item=_runtest_item)
         fm.cleanup()
         fm._current_request_param = None
         if cls is not None and hasattr(instance, "tearDown"):
@@ -1940,6 +2182,50 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         for _mod_name in _loaded_modules:
             _sys_cleanup.modules.pop(_mod_name, None)
             pass
+
+
+def _ensure_parent_packages(filepath: str, module_name: str, loaded: list[str]):
+    """Load parent packages into sys.modules to support relative imports.
+
+    For module_name 'a.b.c.d' at filepath '/x/y/a/b/c/d.py', loads 'a.b.c',
+    'a.b', 'a' as packages by executing their __init__.py. Tracks in |loaded|.
+    """
+    import importlib.util
+    import os as _os
+    import sys as _sys
+
+    parts = module_name.split(".")
+    if len(parts) <= 1:
+        return
+    cwd = _os.getcwd()
+    for i in range(len(parts) - 2, -1, -1):
+        prefix = ".".join(parts[:i+1])
+        if prefix in _sys.modules:
+            continue
+        rel_dir = prefix.replace(".", "/")
+        pkg_dir = _os.path.join(cwd, rel_dir)
+        init_file = _os.path.join(pkg_dir, "__init__.py")
+        if _os.path.isfile(init_file):
+            try:
+                pkg_spec = importlib.util.spec_from_file_location(prefix, init_file)
+                if pkg_spec and pkg_spec.loader:
+                    pkg_mod = importlib.util.module_from_spec(pkg_spec)
+                    _sys.modules[prefix] = pkg_mod
+                    loaded.append(prefix)
+                    pkg_spec.loader.exec_module(pkg_mod)
+            except Exception:
+                pass
+
+
+def _unwrap_param(p):
+    """Unwrap a pytest.param ParameterSet to get the actual value."""
+    if type(p).__name__ == 'ParameterSet':
+        if p.values:
+            return p.values[0] if len(p.values) == 1 else list(p.values)
+        if hasattr(p, 'id') and p.id is not None:
+            return p.id
+        return None
+    return p
 
 
 def _expand_parametrize(tests: list) -> list:
@@ -1958,7 +2244,10 @@ def _expand_parametrize(tests: list) -> list:
         filepath = os.path.abspath(test.path)
         if filepath not in _module_cache:
             try:
-                rel_path = _os.path.relpath(filepath)
+                rel_path = _relpath_cache.get(filepath)
+                if rel_path is None:
+                    rel_path = _os.path.relpath(filepath)
+                    _relpath_cache[filepath] = rel_path
                 module_name = rel_path.replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
                 dirpath = _os.path.dirname(_os.path.abspath(filepath))
                 # Add to sys.path (at end, not start) to support relative imports
@@ -1969,12 +2258,15 @@ def _expand_parametrize(tests: list) -> list:
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
                     _sys.modules[module_name] = mod
+                    _ensure_parent_packages(filepath, module_name, [])
                     spec.loader.exec_module(mod)
                     _module_cache[filepath] = mod
                 else:
                     _module_cache[filepath] = None
-            except Exception as exc:
+            except BaseException as exc:
                 import sys as _sys2
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
                 if not str(exc).startswith("SKIPPED"):
                     print(f"  [oxytest] Warning: could not import {filepath}: {exc}", file=_sys2.stderr)
                 _module_cache[filepath] = None
@@ -1999,6 +2291,14 @@ def _expand_parametrize(tests: list) -> list:
             continue
 
         marks = getattr(func, "_oxytest_marks", [])
+        # Also check function-level pytestmark from real pytest decorators
+        func_marks = getattr(func, "pytestmark", None)
+        if func_marks is not None:
+            if not isinstance(func_marks, (list, tuple)):
+                func_marks = [func_marks]
+            for m in func_marks:
+                if hasattr(m, "name") and hasattr(m, "args") and hasattr(m, "kwargs"):
+                    marks.append((m.name, m.args, m.kwargs))
         # Also check module-level pytestmark
         mod_marks = getattr(mod, "pytestmark", None)
         if mod_marks is not None:
@@ -2010,8 +2310,13 @@ def _expand_parametrize(tests: list) -> list:
         # Separate parametrize marks from other marks
         parametrize_marks = []
         for mark_name, mark_args, mark_kwargs in marks:
-            if mark_name == "parametrize" and len(mark_args) >= 2:
-                parametrize_marks.append((mark_args, mark_kwargs))
+            if mark_name == "parametrize":
+                if len(mark_args) >= 2:
+                    parametrize_marks.append((mark_args, mark_kwargs))
+                elif 'argnames' in mark_kwargs and 'argvalues' in mark_kwargs:
+                    # Handle kwargs-style: @pytest.mark.parametrize(argnames=..., argvalues=...)
+                    _pos_args = (mark_kwargs['argnames'], mark_kwargs['argvalues'])
+                    parametrize_marks.append((_pos_args, mark_kwargs))
 
         if not parametrize_marks:
             expanded.append(test)
@@ -2019,6 +2324,7 @@ def _expand_parametrize(tests: list) -> list:
 
         # Expand parametrize marks (cartesian product for multiple decorators)
         all_value_sets = []
+        all_indirect = set()
         for mark_args, mark_kwargs in parametrize_marks:
             argnames_str = mark_args[0]
             argvalues_list = mark_args[1]
@@ -2036,7 +2342,34 @@ def _expand_parametrize(tests: list) -> list:
                 import sys as _sys2
                 print(f"  [oxytest] Warning: could not expand parametrize for {test.name}: {exc}", file=_sys2.stderr)
                 continue
+
+            # Handle indirect
+            _indirect = mark_kwargs.get("indirect", False)
+            if _indirect:
+                if _indirect is True:
+                    all_indirect.update(argnames)
+                elif isinstance(_indirect, str):
+                    all_indirect.update(a.strip() for a in _indirect.split(","))
+                elif isinstance(_indirect, (list, tuple)):
+                    all_indirect.update(str(a) for a in _indirect)
+
             for i, val in enumerate(argvalues_iter):
+                # Extract id and marks from pytest.param() ParameterSet before unwrapping
+                _param_id = None
+                _param_marks = []
+                if type(val).__name__ == 'ParameterSet':
+                    _param_id = getattr(val, 'id', None)
+                    # Extract marks from MarkDecorator objects
+                    raw_marks = getattr(val, 'marks', ())
+                    for _m in raw_marks:
+                        _mark = getattr(_m, 'mark', _m)
+                        _m_name = getattr(_mark, 'name', None)
+                        if _m_name:
+                            _param_marks.append((_m_name, getattr(_mark, 'args', ()), getattr(_mark, 'kwargs', {})))
+                # Unwrap pytest.param() ParameterSet to get the actual value
+                raw_val = _unwrap_param(val)
+                if raw_val is not val:
+                    val = raw_val
                 if isinstance(val, dict) and "values" in val:
                     values = val["values"]
                 elif isinstance(val, (list, tuple)) and len(val) == len(argnames):
@@ -2045,7 +2378,9 @@ def _expand_parametrize(tests: list) -> list:
                     values = [val]
 
                 # Resolve custom id if provided
-                if ids_opt is not None:
+                if _param_id is not None:
+                    custom_id = _param_id
+                elif ids_opt is not None:
                     if callable(ids_opt):
                         custom_id = ids_opt(val)
                     elif isinstance(ids_opt, (list, tuple)) and i < len(ids_opt):
@@ -2055,7 +2390,7 @@ def _expand_parametrize(tests: list) -> list:
                 else:
                     custom_id = None
 
-                value_sets.append((argnames, values, custom_id))
+                value_sets.append((argnames, values, custom_id, _param_marks))
 
             all_value_sets.append(value_sets)
 
@@ -2070,23 +2405,24 @@ def _expand_parametrize(tests: list) -> list:
             import itertools
             combos = []
             for idx, combo in enumerate(itertools.product(*all_value_sets)):
-                # Flatten: combo is tuple of (argnames, values, custom_id) per mark
+                # Flatten: combo is tuple of (argnames, values, custom_id, marks) per mark
                 all_argnames = []
                 all_values = []
                 id_parts = []
-                for argnames, values, custom_id in combo:
+                all_marks = []
+                for argnames, values, custom_id, marks in combo:
                     all_argnames.extend(argnames)
                     all_values.extend(values)
+                    all_marks.extend(marks)
                     if custom_id is not None:
                         id_parts.append(str(custom_id))
                 if id_parts:
                     final_id = "-".join(id_parts)
                 else:
                     final_id = str(idx)
-                combos.append((idx, (all_argnames, all_values, final_id)))
+                combos.append((idx, (all_argnames, all_values, final_id, all_marks)))
 
-        for idx, (argnames, values, custom_id) in combos:
-            import json
+        for idx, (argnames, values, custom_id, _marks) in combos:
             try:
                 args_json = json.dumps(values)
             except TypeError:
@@ -2105,7 +2441,30 @@ def _expand_parametrize(tests: list) -> list:
                 test_clone.name = f"{test.name}[{idx}]"
             test_clone.line_no = test.line_no
             test_clone.args_json = args_json
-            _parametrize_cache[(filepath, test_clone.name)] = (argnames, values)
+            # Handle indirect parametrize: move indirect argnames into _fixture_params
+            _indirect_list = []
+            if all_indirect:
+                for _an in argnames:
+                    if _an in all_indirect:
+                        _indirect_list.append(_an)
+            if _indirect_list:
+                _direct_argnames = []
+                _direct_values = []
+                _fixture_params = {}
+                for _an, _av in zip(argnames, values):
+                    if _an in all_indirect:
+                        _fixture_params[_an] = _av
+                    else:
+                        _direct_argnames.append(_an)
+                        _direct_values.append(_av)
+                _parametrize_cache[(filepath, test_clone.name)] = (
+                    _direct_argnames, _direct_values, _fixture_params
+                )
+                test_clone.args_json = json.dumps(_direct_values) if _direct_values else "[]"
+            else:
+                _parametrize_cache[(filepath, test_clone.name)] = (argnames, values)
+            if _marks:
+                _param_marks_cache[(filepath, test_clone.name)] = _marks
             expanded.append(test_clone)
 
     # Phase 2: Expand parametrized fixtures
@@ -2138,73 +2497,126 @@ def _expand_parametrize(tests: list) -> list:
                 continue
             meta = getattr(obj, "_oxytest_fixture", None)
             if meta and isinstance(meta, dict) and meta.get("params"):
-                _param_fixtures[meta["name"]] = meta["params"]
-        # Also check builtins registered in the fixture manager
-        from oxytest._fixtures import get_fixture_manager as _get_fm
-        _fm = _get_fm()
-        for n, fdef in _fm._fixtures.items():
-            if fdef.params and n not in _param_fixtures:
-                _param_fixtures[n] = fdef.params
+                _param_fixtures[meta["name"]] = [
+                    _unwrap_param(p) for p in meta["params"]
+                ]
+            # Also detect real pytest.fixture objects not yet registered
+            if hasattr(obj, "_fixture_function_marker"):
+                marker = obj._fixture_function_marker
+                raw_params = getattr(marker, "params", None)
+                if raw_params is not None:
+                    fname = getattr(marker, "name", None) or attr_name
+                    if fname not in _param_fixtures:
+                        _param_fixtures[fname] = [_unwrap_param(p) for p in raw_params]
+        # Build a local map of fixture names → function signatures from module
+        # (supports transitive fixture dependency detection without registering all fixtures)
+        _fixture_funcs = {}
+        for attr_name in dir(mod):
+            obj = getattr(mod, attr_name, None)
+            if obj is None:
+                continue
+            if hasattr(obj, "_oxytest_fixture"):
+                meta = obj._oxytest_fixture
+                _fixture_funcs[meta["name"]] = obj
+            elif hasattr(obj, "_fixture_function_marker"):
+                marker = obj._fixture_function_marker
+                fname = getattr(marker, "name", None) or attr_name
+                _fixture_funcs[fname] = obj.__wrapped__ if hasattr(obj, "__wrapped__") else obj
         if not _param_fixtures:
             _extra_expanded.append(test)
             continue
-        # Check if any parameter matches a parametrized fixture
+        # Check if any parameter matches a parametrized fixture (transitively)
         import inspect as _inspect
+        from oxytest._fixtures import get_fixture_manager as _get_fm
+        _fm = _get_fm()
         sig = _inspect.signature(func)
         matching_fixtures = {}
-        for pname in sig.parameters.keys():
+        _visited_fixtures = set()
+        def _collect_parametrized_fixtures(pname, _depth=0):
+            if _depth > 10 or pname in _visited_fixtures:
+                return
+            _visited_fixtures.add(pname)
             if pname in _param_fixtures:
                 matching_fixtures[pname] = _param_fixtures[pname]
-        if not matching_fixtures:
-            _extra_expanded.append(test)
-            continue
+                return
+            # Check fixture dependencies transitively via local func map
+            if pname in _fixture_funcs:
+                _ffunc = _fixture_funcs[pname]
+                try:
+                    _fsig = _inspect.signature(_ffunc)
+                except Exception:
+                    return
+                for _fpname in _fsig.parameters.keys():
+                    if _fpname not in ("self", "request"):
+                        _collect_parametrized_fixtures(_fpname, _depth + 1)
+            # Also check registered fixtures
+            elif pname in _fm._fixtures:
+                _fdef = _fm._fixtures[pname]
+                if _fdef.params:
+                    matching_fixtures[pname] = [
+                        _unwrap_param(p) for p in _fdef.params
+                    ]
+                    return
+                try:
+                    _fsig = _inspect.signature(_fdef.func)
+                except Exception:
+                    return
+                for _fpname in _fsig.parameters.keys():
+                    if _fpname not in ("self", "request"):
+                        _collect_parametrized_fixtures(_fpname, _depth + 1)
+        for pname in sig.parameters.keys():
+            _collect_parametrized_fixtures(pname)
 
         # Get existing cache entry (argnames, values) or empty
-            cache_key = (filepath, test.name)
-            existing_argnames = []
-            existing_values = []
-            if cache_key in _parametrize_cache:
-                cached = _parametrize_cache[cache_key]
-                if len(cached) == 2:
-                    existing_argnames, existing_values = cached
-                else:
-                    existing_argnames, existing_values = cached[0], cached[1]
+        cache_key = (filepath, test.name)
+        existing_argnames = []
+        existing_values = []
+        if cache_key in _parametrize_cache:
+            cached = _parametrize_cache[cache_key]
+            if len(cached) == 2:
+                existing_argnames, existing_values = cached
+            else:
+                existing_argnames, existing_values = cached[0], cached[1]
 
-            # Create clones for each fixture param combination
-            import itertools as _itertools
-            _fixture_items = sorted(matching_fixtures.items())
-            _param_lists = [v for _, v in _fixture_items]
-            _param_combos = list(_itertools.product(*_param_lists))
-            for _idx, _combo in enumerate(_param_combos):
-                _new_values = list(existing_values)
-                _new_argnames = list(existing_argnames)
-                _fixture_params = {}
-                _id_parts = []
-                for (_fname, _), _pval in zip(_fixture_items, _combo):
-                    # Unwrap pytest.param() dicts to get the actual value
-                    if isinstance(_pval, dict) and "values" in _pval:
-                        _actual = _pval["values"]
-                        if isinstance(_actual, (list, tuple)) and len(_actual) == 1:
-                            _actual = _actual[0]
-                        _pval = _actual
-                    _fixture_params[_fname] = _pval
-                    _id_parts.append(str(_pval))
-                name_suffix = "-".join(_id_parts)
-                test_clone = TestItem()
-                test_clone.path = test.path
-                test_clone.line_no = test.line_no
-                test_clone.args_json = "[]"
-                # Check if test already has bracket suffix from parametrize
-                if "[" in test.name:
-                    base, bracket = test.name.split("[", 1)
-                    bracket = bracket.rstrip("]")
-                    test_clone.name = f"{base}[{bracket}-{name_suffix}]"
-                else:
-                    test_clone.name = f"{test.name}[{name_suffix}]"
-                _parametrize_cache[(filepath, test_clone.name)] = (
-                    _new_argnames, _new_values, _fixture_params
-                )
-                _extra_expanded.append(test_clone)
+        # Create clones for each fixture param combination
+        import itertools as _itertools
+        _fixture_items = sorted(matching_fixtures.items())
+        _param_lists = [v for _, v in _fixture_items]
+        _param_combos = list(_itertools.product(*_param_lists))
+        for _idx, _combo in enumerate(_param_combos):
+            _new_values = list(existing_values)
+            _new_argnames = list(existing_argnames)
+            _fixture_params = {}
+            _id_parts = []
+            for (_fname, _), _pval in zip(_fixture_items, _combo):
+                # Unwrap pytest.param() or dict-like to get the actual value
+                if hasattr(_pval, 'values'):
+                    _pval = _pval.values[0] if _pval.values and len(_pval.values) == 1 else list(_pval.values) if _pval.values else None
+                elif isinstance(_pval, dict) and "values" in _pval:
+                    _actual = _pval["values"]
+                    if isinstance(_actual, (list, tuple)) and len(_actual) == 1:
+                        _actual = _actual[0]
+                    _pval = _actual
+                _fixture_params[_fname] = _pval
+                _id_parts.append(str(_pval))
+            name_suffix = "-".join(_id_parts)
+            if not name_suffix:
+                name_suffix = str(_idx)
+            test_clone = TestItem()
+            test_clone.path = test.path
+            test_clone.line_no = test.line_no
+            test_clone.args_json = "[]"
+            # Check if test already has bracket suffix from parametrize
+            if "[" in test.name:
+                base, bracket = test.name.split("[", 1)
+                bracket = bracket.rstrip("]")
+                test_clone.name = f"{base}[{bracket}-{name_suffix}]"
+            else:
+                test_clone.name = f"{test.name}[{name_suffix}]"
+            _parametrize_cache[(filepath, test_clone.name)] = (
+                _new_argnames, _new_values, _fixture_params
+            )
+            _extra_expanded.append(test_clone)
 
         if _extra_expanded:
             expanded = _extra_expanded
@@ -2232,9 +2644,14 @@ def _expand_parametrize(tests: list) -> list:
         if func is None:
             _anyio_expanded.append(test)
             continue
-        # Check for anyio marker
+        # Check for anyio marker (oxytest marks or real pytest marks)
         marks = getattr(func, "_oxytest_marks", [])
         has_anyio = any(m[0] == "anyio" for m in marks) or hasattr(func, "_anyio_mark")
+        if not has_anyio and hasattr(func, "pytestmark"):
+            for _m in func.pytestmark:
+                if getattr(_m, "name", None) == "anyio":
+                    has_anyio = True
+                    break
         if not has_anyio:
             _anyio_expanded.append(test)
             continue
