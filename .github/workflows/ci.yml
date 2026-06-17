@@ -50,10 +50,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
-      - name: Build wheel (Debug)
+      - name: Build wheel
         run: |
           uv pip install maturin --system
-          maturin build --out dist
+          maturin build --out dist --release
       - name: Install wheel and test deps
         run: |
           uv pip install --system dist/*.whl
@@ -70,16 +70,16 @@ jobs:
         python-version: ["3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: Swatinem/rust-cache@v2
-      - name: Build wheel (Debug)
+      - name: Build wheel
         run: |
           uv pip install maturin --system
-          maturin build --out dist
+          maturin build --out dist --release
       - name: Install wheel and test deps
         shell: pwsh
         run: |
@@ -105,10 +105,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
-      - name: Build wheel (Debug)
+      - name: Build wheel
         run: |
           uv pip install maturin --system
-          maturin build --out dist
+          maturin build --out dist --release
       - name: Install wheel and test deps
         run: |
           uv pip install --system dist/*.whl
