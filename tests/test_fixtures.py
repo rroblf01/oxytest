@@ -12,6 +12,7 @@ from oxytest._fixtures import (
     get_fixture_manager,
     register_fixture,
     fixture_registry,
+    _TempPathFactory,
 )
 
 
@@ -1056,3 +1057,47 @@ def test_monkeypatch_context():
         mp.setattr("os.path.sep", "/custom")
         assert _os.path.sep == "/custom"
     assert _os.path.sep == original
+
+
+# ── New 3.0.0 tests ─────────────────────────────────────────────────
+
+
+def test_tmp_path_factory_mktemp():
+    fm = FixtureManager()
+    factory = fm.resolve("tmp_path_factory")
+    tmp = factory.mktemp("test_mktemp")
+    assert tmp.exists()
+    assert tmp.is_dir()
+    assert "test_mktemp" in tmp.name
+
+
+def test_tmp_path_factory_getbasetemp():
+    fm = FixtureManager()
+    factory = fm.resolve("tmp_path_factory")
+    base = factory.getbasetemp()
+    assert base.exists()
+    assert base.is_dir()
+
+
+def test_tmp_path_factory_with_basetemp():
+    import tempfile as _tf
+    base = pathlib.Path(_tf.mkdtemp())
+    factory = _TempPathFactory(basetemp=base)
+    tmp = factory.mktemp("test_base")
+    assert str(tmp).startswith(str(base))
+    assert tmp.exists()
+
+
+def test_tmp_path_factory_cleanup():
+    """Verify that created dirs are tracked for cleanup."""
+    import tempfile as _tf
+    base = pathlib.Path(_tf.mkdtemp())
+    factory = _TempPathFactory(basetemp=base)
+    tmp = factory.mktemp("clean_test")
+    assert tmp.exists()
+    assert tmp in factory._created
+    # Simulate cleanup
+    import shutil
+    for d in factory._created:
+        shutil.rmtree(d, ignore_errors=True)
+    assert not tmp.exists()

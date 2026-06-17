@@ -1373,9 +1373,14 @@ def _run_tests(
         ]
 
     if strict_markers:
+        # Collect registered markers: from ini registry and from pyproject.toml
         _extra = getattr(config, '_inicfg', {}).get('markers', None)
         if isinstance(_extra, str):
             _extra = [_extra]
+        # Also check opts._extra_markers from pyproject.toml [tool.oxytest] markers
+        _opts_markers = getattr(config, '_opts', {}).get("_extra_markers", [])
+        if _opts_markers:
+            _extra = (_extra or []) + list(_opts_markers)
         _validate_markers(all_tests, extra_markers=_extra)
 
     if fixtures_list:

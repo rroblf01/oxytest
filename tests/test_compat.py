@@ -976,3 +976,30 @@ def test_warns_re_pattern():
     with pytest.warns(UserWarning, match=pattern):
         import warnings
         warnings.warn("some message", UserWarning)
+
+
+# ── New 3.0.0 tests ─────────────────────────────────────────────────
+
+
+def test_deprecated_call_future_warning():
+    import warnings
+    with pytest.deprecated_call():
+        warnings.warn("future deprecation", FutureWarning)
+
+
+def test_config_get_verbosity():
+    from oxytest._compat import Config
+    c = Config({"verbose": True})
+    assert c.get_verbosity() > 0
+
+
+def test_config_inipath():
+    from oxytest._compat import Config
+    c = Config({"inipath": "/tmp/pytest.ini"})
+    assert c.inipath is not None
+
+
+def test_config_invocation_params():
+    from oxytest._compat import Config
+    c = Config({})
+    assert hasattr(c, 'invocation_params')

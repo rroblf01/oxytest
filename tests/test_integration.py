@@ -377,3 +377,54 @@ def test_runxfail(tmp_path):
     # --runxfail makes xfail tests run normally → they fail
     assert code == 1
     assert "failed" in stdout or "FAILED" in stdout
+
+
+def test_noconftest(tmp_path):
+    """--noconftest should skip loading conftest.py."""
+    _write_conftest(tmp_path, """
+        import pytest
+        @pytest.fixture
+        def my_fixture():
+            return 42
+    """)
+    _write_test(tmp_path, "test_nc.py", """
+        def test_without_fixture():
+            assert True
+    """)
+    code, _, _ = _run("--noconftest", "--tb=no", "-q", str(tmp_path))
+    assert code == 0
+
+
+def test_strict_markers_custom(tmp_path):
+    """--strict-markers should accept markers registered via ini markers."""
+    import os
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("[tool.oxytest]\nmarkers = [\"custom_marker: custom test marker\"]")
+        _write_test(tmp_path, "test_sm.py", """
+            import oxytest as pytest
+            @pytest.mark.custom_marker
+            def test_custom():
+                assert True
+        """)
+        code, _, _ = _run("--strict-markers", "--tb=no", "-q", str(tmp_path), cwd=tmp_path)
+        assert code == 0
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_override_ini_accumulate(tmp_path):
+    """Multiple --override-ini flags should all be applied."""
+    _write_test(tmp_path, "test_oi.py", "def test_ok(): pass")
+    code, _, _ = _run("-o", "filterwarnings=error", "-o", "log_cli=true", "--tb=no", "-q", str(tmp_path))
+    assert code == 0
+
+
+def test_pytest_plugins_string(tmp_path):
+    """pytest_plugins as string list in conftest should load plugins."""
+    _write_conftest(tmp_path, 'pytest_plugins = ["sys"]')
+    _write_test(tmp_path, "test_pp.py", "def test_ok(): pass")
+    code, _, _ = _run("--tb=no", "-q", str(tmp_path))
+    assert code == 0

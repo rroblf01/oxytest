@@ -347,3 +347,20 @@ def test_parse_cov_append():
 def test_parse_override_ini_equals():
     opts = _parse_args(["--override-ini=filterwarnings=error"])
     assert "filterwarnings=error" in opts["override_ini"]
+
+
+def test_parse_override_ini_accumulate():
+    opts = _parse_args(["-o", "a=1", "-o", "b=2"])
+    assert "a=1" in opts["override_ini"]
+    assert "b=2" in opts["override_ini"]
+    assert len(opts["override_ini"]) == 2
+
+
+def test_parse_o_short_form():
+    opts = _parse_args(["-o", "foo=bar"])
+    assert "foo=bar" in opts["override_ini"]
+
+
+def test_parse_override_ini_mixed():
+    opts = _parse_args(["--override-ini", "x=1", "-o", "y=2"])
+    assert len(opts["override_ini"]) == 2
