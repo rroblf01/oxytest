@@ -1,5 +1,8 @@
 import ast
 import sys
+import os
+import importlib.abc
+import importlib.util
 
 
 def _format_assert_detail(test_val):
@@ -90,21 +93,92 @@ def _rewrite_module(source, filename):
         return source
 
 
-class _AssertLoader:
-    def __init__(self):
-        self._installed = False
-        self._inject_code = (
-            "from oxytest._assert import _oxytest_assert\n"
-        )
+class _RewriteLoader(importlib.abc.Loader):
+    """Custom loader that rewrites assert statements before compilation."""
 
-    def install(self):
-        if self._installed:
-            return
-        self._installed = True
-        sys.meta_path.insert(0, self)
+    def __init__(self, origin):
+        self._origin = origin
+
+    def create_module(self, spec):
+        return None  # Use default module creation
+
+    def exec_module(self, module):
+        filename = self._origin
+        if not filename or not os.path.isfile(filename):
+            raise ImportError(f"cannot load {module.__name__} from {filename}")
+        with open(filename, "r", encoding="utf-8") as f:
+            source = f.read()
+        if "assert " in source or "assert(" in source:
+            rewritten = _rewrite_module(source, filename)
+        else:
+            rewritten = source
+        code = compile(rewritten, filename, "exec", dont_inherit=True)
+        exec(code, module.__dict__)
+
+
+class _AssertLoader(importlib.abc.MetaPathFinder):
+    """Import hook that rewrites assert statements in test files."""
+
+    def __init__(self):
+        self._rewrite_prefixes = set()
+
+    def add_rewrite_path(self, path):
+        """Register a directory whose modules should have asserts rewritten."""
+        abs_path = os.path.abspath(path)
+        self._rewrite_prefixes.add(abs_path)
 
     def find_spec(self, fullname, path, target=None):
+        if not self._rewrite_prefixes:
+            return None
+        if not path:
+            return None
+        for entry in path:
+            norm_entry = os.path.abspath(entry) if entry else ""
+            for prefix in self._rewrite_prefixes:
+                if norm_entry.startswith(prefix):
+                    # Manually construct the spec without calling find_spec (avoids recursion)
+                    origin = None
+                    is_pkg = False
+                    base_path = os.path.join(norm_entry, fullname.replace(".", os.sep))
+                    py_path = base_path + ".py"
+                    init_path = os.path.join(base_path, "__init__.py")
+                    if os.path.isfile(init_path):
+                        origin = init_path
+                        is_pkg = True
+                    elif os.path.isfile(py_path):
+                        origin = py_path
+                    if origin:
+                        return importlib.util.spec_from_loader(
+                            fullname,
+                            _RewriteLoader(origin),
+                            origin=origin,
+                            is_package=is_pkg,
+                        )
         return None
 
 
 _assert_loader = _AssertLoader()
+
+
+def install_assert_rewriting(rewrite_paths):
+    """Install the assert rewriting hook for the given paths."""
+    for p in rewrite_paths:
+        _assert_loader.add_rewrite_path(p)
+    if not any(isinstance(x, _AssertLoader) for x in sys.meta_path):
+        sys.meta_path.insert(0, _assert_loader)
+
+
+def register_assert_rewrite(*names):
+    """Register modules for assert rewriting.
+    Public API matching pytest.register_assert_rewrite().
+    Accepts module names (strings) which are converted to filesystem paths
+    for the rewriting hook."""
+    for name in names:
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ModuleNotFoundError, ValueError):
+            spec = None
+        if spec and spec.origin:
+            _assert_loader.add_rewrite_path(os.path.dirname(spec.origin))
+    if not any(isinstance(x, _AssertLoader) for x in sys.meta_path):
+        sys.meta_path.insert(0, _assert_loader)
