@@ -5,6 +5,8 @@ import sys
 import time
 import threading
 import xml.etree.ElementTree as ET
+from decimal import Decimal
+from datetime import datetime, timedelta as Timedelta
 from collections import defaultdict
 from typing import (
     Any,
@@ -88,8 +90,13 @@ class ApproxDecimal:
         return hash(self.expected)
 
     def _eq(self, actual):
+        import math
         if actual is None or self.expected is None:
             return actual == self.expected
+        # Handle nan_ok: NaN compares equal to NaN
+        if self.nan_ok and isinstance(actual, float) and isinstance(self.expected, float):
+            if math.isnan(actual) and math.isnan(self.expected):
+                return True
         if isinstance(self.expected, (int, float)):
             diff = abs(actual - self.expected)
             abs_tol = max(self.abs, self.rel * max(abs(actual), abs(self.expected)))
@@ -108,6 +115,15 @@ class ApproxDecimal:
                 ApproxDecimal(self.expected[k], rel=self.rel, abs=self.abs, nan_ok=self.nan_ok)._eq(actual[k])
                 for k in self.expected
             )
+        if isinstance(self.expected, Decimal):
+            import decimal
+            diff = abs(actual - self.expected)
+            abs_tol = decimal.Decimal(str(max(self.abs, self.rel * float(max(abs(actual), abs(self.expected))))))
+            return diff <= abs_tol
+        if isinstance(self.expected, (datetime, Timedelta)):
+            diff = abs((actual - self.expected).total_seconds() if isinstance(self.expected, (datetime,)) else abs(actual - self.expected))
+            abs_tol = max(self.abs, self.rel * diff) if diff > 0 else self.abs
+            return diff <= abs_tol
         return actual == self.expected
 
 
@@ -129,7 +145,14 @@ class RaisesContext:
     def __enter__(self):
         return self
 
+    @property
+    def type(self):
+        if self.excinfo:
+            return self.excinfo[0]
+        return None
+
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.excinfo = (exc_type, exc_val, exc_tb)
         if exc_type is None:
             raise Failed(
                 f"DID NOT RAISE {self.expected_exception}"
@@ -268,7 +291,7 @@ class _WarningsChecker:
         found = False
         for w in self._cm:
             if issubclass(w.category, self.expected_warning):
-                if self.match is None or re.search(self.match, str(w.message)):
+                if self.match is None or (hasattr(self.match, 'search') and self.match.search(str(w.message))) or re.search(self.match, str(w.message)):
                     self.warning = w
                     found = True
                     continue
@@ -968,6 +991,20 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         elif arg == "--basetemp" and i + 1 < len(args):
             i += 1
             parsed["basetemp"] = args[i]
+        elif arg == "-W" and i + 1 < len(args):
+            i += 1
+            parsed.setdefault("pythonwarnings", []).append(args[i])
+            import warnings as _w
+            _w.simplefilter(args[i])  # type: ignore
+        elif arg == "--import-mode" and i + 1 < len(args):
+            i += 1
+            if args[i] in ("prepend", "append", "importlib"):
+                parsed["import_mode"] = args[i]
+        elif arg == "--ignore-glob" and i + 1 < len(args):
+            i += 1
+            parsed.setdefault("ignore_glob", []).append(args[i])
+        elif arg == "--continue-on-collection-errors":
+            parsed["continue_on_collection_errors"] = True
         elif arg == "--cov":
             if i + 1 < len(args) and not args[i + 1].startswith("-"):
                 i += 1
@@ -1214,6 +1251,11 @@ def _run_tests(
             _tdir = os.path.dirname(os.path.abspath(_test.path))
             _load_conftest(_tdir, config=config, confcutdir=confcutdir)
 
+    # Call pytest_itemcollected for each discovered test
+    if pm:
+        for t in all_tests:
+            pm.hook.pytest_itemcollected(item=t)
+
     if has_expr:
         all_tests = _filter_keyword_expression(all_tests, keyword)
     if marker_expr:
@@ -1384,6 +1426,19 @@ def _format_assert_detail(source_line: str, filename: str, lineno: int) -> str:
             ast.In: "in", ast.NotIn: "not in",
         }.get(type(op), "")
         if op_str:
+            # Try pytest_assertrepr_compare hook for custom explanations
+            try:
+                from oxytest._plugin import get_plugin_manager
+                _pm = get_plugin_manager()
+                _hook_result = _pm.hook.pytest_assertrepr_compare(
+                    config=None, op=op_str, left=ast.unparse(left), right=ast.unparse(right)
+                )
+                if _hook_result:
+                    for line in _hook_result:
+                        if line:
+                            parts.extend(line if isinstance(line, list) else [str(line)])
+            except Exception:
+                pass
             parts.append(f"{ast.unparse(left)} {op_str} {ast.unparse(right)}")
     elif isinstance(test, ast.Call) and isinstance(test.func, ast.Name) and test.func.id in ("isinstance", "hasattr"):
         parts.append(ast.unparse(test))
@@ -1590,6 +1645,14 @@ def _write_junitxml(reporter: TerminalReporter, path: str):
         if result.error_output:
             system_err_lines.append(f"--- {result.test.path}::{result.test.name} ---")
             system_err_lines.append(result.error_output)
+        # Include record_property data if present
+        _key = (result.test.path, result.test.name)
+        if _key in _junit_properties:
+            props = ET.SubElement(tc, "properties")
+            for pname, pval in _junit_properties[_key]:
+                prop = ET.SubElement(props, "property")
+                prop.set("name", str(pname))
+                prop.set("value", str(pval))
 
     if system_out_lines:
         so = ET.SubElement(suite, "system-out")
@@ -1788,6 +1851,12 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
             if spec and spec.loader:
                 fm.register_from_module(mod)
                 pm.load_conftest_plugins(mod, dirpath)
+                # Support pytest_plugins variable in conftest
+                _pytest_plugins = getattr(mod, 'pytest_plugins', None)
+                if _pytest_plugins:
+                    for _plugin_name in (_pytest_plugins if isinstance(_pytest_plugins, (list, tuple)) else [_pytest_plugins]):
+                        if isinstance(_plugin_name, str):
+                            pm.load_plugin_by_name(_plugin_name)
         parent = os.path.dirname(dirpath)
         if parent == dirpath:
             break
@@ -1799,6 +1868,7 @@ _parametrize_cache: dict = {}
 _param_marks_cache: dict = {}
 _conftest_seen = threading.local()
 _relpath_cache: dict = {}
+_junit_properties: dict = {}
 
 
 def _module_cache_clear():
@@ -2240,6 +2310,15 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         raise
     finally:
         _pm.hook.pytest_runtest_teardown(item=_runtest_item)
+        # Capture record_property data for JUnit XML
+        try:
+            _rp = getattr(fm, '_fixtures', {}).get('record_property')
+            if _rp and hasattr(_rp, 'func'):
+                _rp_inst = _rp.func()
+                if hasattr(_rp_inst, 'properties') and _rp_inst.properties:
+                    _junit_properties[(filepath, name)] = list(_rp_inst.properties)
+        except Exception:
+            pass
         fm.cleanup()
         fm._current_request_param = None
         if cls is not None and hasattr(instance, "tearDown"):

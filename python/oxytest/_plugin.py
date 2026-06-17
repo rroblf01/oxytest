@@ -83,6 +83,21 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: int):
     """Called after the terminal summary is printed."""
 
 
+@_hook_spec
+def pytest_collect_file(file_path: Any, parent: Any) -> Any:
+    """Called when collecting a file. Return a collector or None."""
+
+
+@_hook_spec
+def pytest_itemcollected(item: Any):
+    """Called when a test item is collected."""
+
+
+@_hook_spec
+def pytest_assertrepr_compare(config: Any, op: str, left: Any, right: Any) -> Any:
+    """Return explanation for comparisons in assertions."""
+
+
 # ---------------------------------------------------------------------------
 # Plugin manager
 # ---------------------------------------------------------------------------
