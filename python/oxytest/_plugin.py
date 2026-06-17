@@ -98,6 +98,11 @@ def pytest_assertrepr_compare(config: Any, op: str, left: Any, right: Any) -> An
     """Return explanation for comparisons in assertions."""
 
 
+@_hook_spec
+def pytest_load_initial_conftests(early_config: Any) -> None:
+    """Called before conftest files are loaded."""
+
+
 # ---------------------------------------------------------------------------
 # Plugin manager
 # ---------------------------------------------------------------------------

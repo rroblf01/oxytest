@@ -71,6 +71,7 @@ class FixtureManager:
         self.register_builtin("capfdbinary", self._fixture_capfdbinary, scope="function")
         self.register_builtin("recwarn", self._fixture_recwarn, scope="function")
         self.register_builtin("doctest_namespace", self._fixture_doctest_namespace, scope="session")
+        self.register_builtin("tmp_path_factory", self._fixture_tmp_path_factory, scope="session")
         self._setup_third_party_fixtures()
 
     def _setup_third_party_fixtures(self):
@@ -391,6 +392,9 @@ class FixtureManager:
     def _fixture_doctest_namespace(self):
         return {}
 
+    def _fixture_tmp_path_factory(self):
+        return _TempPathFactory()
+
     def _fixture_monkeypatch(self):
         mp = MonkeyPatch()
         yield mp
@@ -472,6 +476,22 @@ class _CacheFixture:
         self._store.clear()
 
 
+class _TempPathFactory:
+    def __init__(self):
+        self._basetemp = None
+
+    def mktemp(self, basename: str) -> pathlib.Path:
+        import tempfile as _tf
+        tmpdir = _tf.mkdtemp(prefix=f"{basename}_")
+        return pathlib.Path(tmpdir)
+
+    def getbasetemp(self) -> pathlib.Path:
+        if self._basetemp is None:
+            import tempfile as _tf
+            self._basetemp = pathlib.Path(_tf.mkdtemp(prefix="oxytest_"))
+        return self._basetemp
+
+
 class _SubTestFixture:
     """Fixture that supports subtests via ``with subtests.test(...)`` context manager."""
     def __init__(self):
@@ -490,7 +510,7 @@ class _SubTestContext:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None and issubclass(exc_type, (AssertionError, Exception)):
+        if exc_type is not None and issubclass(exc_type, AssertionError):
             msg = str(exc_val)
             params = ", ".join(f"{k}={v!r}" for k, v in self._kwargs.items())
             self._fixture._failures.append(f"subtest ({params}): {msg}")
@@ -753,7 +773,11 @@ class MonkeyPatch:
         if name is _MONKEY_UNSET:
             raise TypeError("setattr requires a name")
         try:
-            old = getattr(target, name, MonkeyPatch._UNSET)  # type: ignore
+            # For class attributes, use __dict__ to avoid descriptor invocation
+            if inspect.isclass(target) and name in target.__dict__:
+                old = target.__dict__[name]
+            else:
+                old = getattr(target, name, MonkeyPatch._UNSET)  # type: ignore
         except AttributeError:
             if raising:
                 raise

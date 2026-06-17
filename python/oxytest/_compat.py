@@ -633,12 +633,13 @@ class TestReport:
 
 class TerminalReporter:
     def __init__(self, verbose: bool = False, quiet: bool = False, tb_style: str = "short",
-                 showlocals: bool = False, setup_show: bool = False):
+                 showlocals: bool = False, setup_show: bool = False, no_header: bool = False):
         self.verbose = verbose
         self.quiet = quiet
         self.tb_style = tb_style
         self.showlocals = showlocals
         self.setup_show = setup_show
+        self.no_header = no_header
         self.stats = defaultdict(int)
         self.results: List[TestResult] = []
         self.failures: List[TestResult] = []
@@ -649,7 +650,7 @@ class TerminalReporter:
 
     def start(self):
         self.start_time = time.time()
-        if not self.quiet:
+        if not self.quiet and not self.no_header:
             print("=" * 60)
             print("oxytest: running tests")
             print("=" * 60)
@@ -909,6 +910,7 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         arg = args[i]
         if arg in ("-v", "--verbose"):
             parsed["verbose"] = True
+            parsed["verbosity"] = parsed.get("verbosity", 0) + 1
         elif arg in ("-q", "--quiet"):
             parsed["quiet"] = True
         elif arg in ("-x", "--exitfirst"):
@@ -949,6 +951,16 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
             parsed["ignore"].append(args[i])
         elif arg in ("--collect-only", "--co"):
             parsed["collect_only"] = True
+        elif arg == "--no-header":
+            parsed["no_header"] = True
+        elif arg == "--capture" and i + 1 < len(args):
+            i += 1
+            if args[i] in ("fd", "sys", "tee-sys", "tee-fd", "no"):
+                parsed["capture"] = args[i]
+        elif arg == "--show-capture" and i + 1 < len(args):
+            i += 1
+            if args[i] in ("no", "stdout", "stderr", "log", "all"):
+                parsed["show_capture"] = args[i]
         elif arg == "--durations" and i + 1 < len(args):
             i += 1
             parsed["durations"] = int(args[i])
@@ -981,6 +993,11 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         elif arg == "--override-ini" and i + 1 < len(args):
             i += 1
             parsed["override_ini"] = args[i]
+        elif arg == "--override-ini=":
+            parsed["override_ini"] = arg.split("=", 1)[1]
+        elif arg == "--deselect" and i + 1 < len(args):
+            i += 1
+            parsed.setdefault("deselect", []).append(args[i])
         elif arg == "--confcutdir" and i + 1 < len(args):
             i += 1
             parsed["confcutdir"] = args[i]
@@ -1026,6 +1043,29 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
             parsed["cov_fail_under"] = float(args[i])
         elif arg == "--cov-append":
             parsed["cov_append"] = True
+        elif arg == "--log-level" and i + 1 < len(args):
+            i += 1
+            parsed["log_level"] = args[i]
+        elif arg == "--log-format" and i + 1 < len(args):
+            i += 1
+            parsed["log_format"] = args[i]
+        elif arg == "--log-cli-level" and i + 1 < len(args):
+            i += 1
+            parsed["log_cli_level"] = args[i]
+        elif arg == "--color" and i + 1 < len(args):
+            i += 1
+            if args[i] in ("yes", "no", "auto"):
+                parsed["color"] = args[i]
+        elif arg == "--code-highlight":
+            parsed["code_highlight"] = True
+        elif arg == "--stepwise-skip":
+            parsed["stepwise_skip"] = True
+        elif arg == "--full-trace":
+            parsed["full_trace"] = True
+        elif arg == "--setup-only":
+            parsed["setup_only"] = True
+        elif arg == "--setup-plan":
+            parsed["setup_plan"] = True
         elif arg in ("-h", "--help"):
             parsed["help"] = True
         elif arg.startswith("-"):
@@ -1205,15 +1245,17 @@ def _run_tests(
     marker_expr: Optional[str] = None,
     cov_plugin=None,
     confcutdir: Optional[str] = None,
+    no_header: bool = False,
 ) -> int:
     pm = None
     if config is not None:
         from oxytest._plugin import get_plugin_manager
         pm = get_plugin_manager()
         pm.hook.pytest_sessionstart(session=config)
+        pm.hook.pytest_load_initial_conftests(early_config=config)
 
-    if cache_clear:
-        _clear_cache()
+        if cache_clear:
+            _clear_cache()
 
     root_paths = [rootdir] if rootdir else paths
 
@@ -1291,6 +1333,7 @@ def _run_tests(
     reporter = TerminalReporter(
         verbose=verbose, quiet=quiet, tb_style=tb_style,
         showlocals=showlocals, setup_show=setup_show,
+        no_header=no_header,
     )
     reporter.start()
 
@@ -1801,6 +1844,7 @@ def main(args: Optional[List[str]] = None) -> int:
         marker_expr=opts.get("marker_expr", None),
         cov_plugin=cov_plugin,
         confcutdir=opts.get("confcutdir", None),
+        no_header=opts.get("no_header", False),
     )
 
     if cov_plugin:
