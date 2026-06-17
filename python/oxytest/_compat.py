@@ -469,6 +469,10 @@ class FixtureRequest:
         self._test_func = _test_func
         self.param = None
         self._oxytest_config = None
+        self._finalizers: list = []
+
+    def addfinalizer(self, finalizer):
+        self._finalizers.append(finalizer)
 
     @property
     def config(self):
@@ -2216,6 +2220,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                     from oxytest._compat import Config as _OxyConfig
                     req = _FR(_test_func=func)
                     req._oxytest_config = getattr(fm, '_config', None) or _OxyConfig({})
+                    fm._current_request = req
                     current_param = getattr(fm, '_current_request_param', None)
                     if isinstance(current_param, dict):
                         req.param = current_param.get("request")
@@ -2451,6 +2456,16 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         except Exception:
             pass
         fm.cleanup()
+        # Run finalizers from FixtureRequest
+        _req = getattr(fm, '_current_request', None)
+        if _req and hasattr(_req, '_finalizers'):
+            for _fn in reversed(_req._finalizers):
+                try:
+                    _fn()
+                except Exception:
+                    pass
+            _req._finalizers.clear()
+        fm._current_request = None
         fm._current_request_param = None
         if cls is not None and hasattr(instance, "tearDown"):
             try:
@@ -2772,36 +2787,48 @@ def _expand_parametrize(tests: list) -> list:
         # Find parametrized fixtures in the module by scanning its attributes
         _param_fixtures = {}
         for attr_name in dir(mod):
-            obj = getattr(mod, attr_name, None)
+            try:
+                obj = getattr(mod, attr_name, None)
+            except Exception:
+                continue
             if obj is None:
                 continue
-            meta = getattr(obj, "_oxytest_fixture", None)
-            if meta and isinstance(meta, dict) and meta.get("params"):
-                _param_fixtures[meta["name"]] = [
-                    _unwrap_param(p) for p in meta["params"]
-                ]
-            # Also detect real pytest.fixture objects not yet registered
-            if hasattr(obj, "_fixture_function_marker"):
-                marker = obj._fixture_function_marker
-                raw_params = getattr(marker, "params", None)
-                if raw_params is not None:
-                    fname = getattr(marker, "name", None) or attr_name
-                    if fname not in _param_fixtures:
-                        _param_fixtures[fname] = [_unwrap_param(p) for p in raw_params]
+            try:
+                meta = getattr(obj, "_oxytest_fixture", None)
+                if meta and isinstance(meta, dict) and meta.get("params"):
+                    _param_fixtures[meta["name"]] = [
+                        _unwrap_param(p) for p in meta["params"]
+                    ]
+                # Also detect real pytest.fixture objects not yet registered
+                if getattr(obj, "_fixture_function_marker", None) is not None:
+                    marker = obj._fixture_function_marker
+                    raw_params = getattr(marker, "params", None)
+                    if raw_params is not None:
+                        fname = getattr(marker, "name", None) or attr_name
+                        if fname not in _param_fixtures:
+                            _param_fixtures[fname] = [_unwrap_param(p) for p in raw_params]
+            except Exception:
+                continue
         # Build a local map of fixture names → function signatures from module
         # (supports transitive fixture dependency detection without registering all fixtures)
         _fixture_funcs = {}
         for attr_name in dir(mod):
-            obj = getattr(mod, attr_name, None)
+            try:
+                obj = getattr(mod, attr_name, None)
+            except Exception:
+                continue
             if obj is None:
                 continue
-            if hasattr(obj, "_oxytest_fixture"):
-                meta = obj._oxytest_fixture
-                _fixture_funcs[meta["name"]] = obj
-            elif hasattr(obj, "_fixture_function_marker"):
-                marker = obj._fixture_function_marker
-                fname = getattr(marker, "name", None) or attr_name
-                _fixture_funcs[fname] = obj.__wrapped__ if hasattr(obj, "__wrapped__") else obj
+            try:
+                if getattr(obj, "_oxytest_fixture", None) is not None:
+                    meta = obj._oxytest_fixture
+                    _fixture_funcs[meta["name"]] = obj
+                elif getattr(obj, "_fixture_function_marker", None) is not None:
+                    marker = obj._fixture_function_marker
+                    fname = getattr(marker, "name", None) or attr_name
+                    _fixture_funcs[fname] = obj.__wrapped__ if hasattr(obj, "__wrapped__") else obj
+            except Exception:
+                continue
         if not _param_fixtures:
             _extra_expanded.append(test)
             continue

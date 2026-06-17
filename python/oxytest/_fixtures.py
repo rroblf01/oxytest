@@ -41,12 +41,12 @@ class FixtureManager:
         self._resolved_fixtures: list[Any] = []
         self._tmpdirs: list = []
         self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
         self.current_test_func = None
         self._config = None
         self._current_request_param = None
         self._current_class = None
         self._current_instance = None
+        self._current_request = None
         self._setup_builtins()
         self._registered_files: set = set()
         self._autouse_list: Optional[list] = None
@@ -92,8 +92,12 @@ class FixtureManager:
         self._autouse_list = None
 
     def register(self, func: Callable):
-        if hasattr(func, "_oxytest_fixture"):
-            meta: dict[str, Any] = cast("dict[str, Any]", func._oxytest_fixture)
+        try:
+            meta_value = getattr(func, "_oxytest_fixture", None)
+        except Exception:
+            return
+        if meta_value is not None:
+            meta: dict[str, Any] = cast("dict[str, Any]", meta_value)
             self._fixtures[meta["name"]] = FixtureDef(
                 func,
                 scope=meta["scope"],
@@ -109,47 +113,72 @@ class FixtureManager:
             return
         self._registered_files.add(mod_id)
         for attr_name in dir(module):
-            obj = getattr(module, attr_name)
-            if hasattr(obj, "_oxytest_fixture"):
-                self.register(obj)
-            elif hasattr(obj, "_pytestfixturefunction") or (hasattr(obj, "__wrapped__") and hasattr(obj, "name")):
-                if hasattr(obj, "_fixture_function"):
-                    wrapped = obj._fixture_function
-                elif hasattr(obj, "__wrapped__"):
-                    wrapped = obj.__wrapped__
-                else:
-                    continue
-                if hasattr(wrapped, "__func__"):
-                    wrapped = wrapped.__func__
-                if not callable(wrapped) or hasattr(wrapped, "_oxytest_fixture"):
-                    continue
-                mod = getattr(wrapped, "__module__", "")
-                if mod.startswith(("pytest_benchmark", "pytest_codspeed")):
-                    continue
-                scope = "function"
-                params = None
-                autouse = False
-                fixture_name = attr_name
-                if hasattr(obj, "_fixture_function_marker"):
-                    marker = obj._fixture_function_marker
-                    scope = getattr(marker, "scope", "function") or "function"
-                    raw_params = getattr(marker, "params", None)
-                    params = (
-                        [_unwrap_param(p) for p in raw_params]
-                        if raw_params is not None
-                        else None
-                    )
-                    autouse = getattr(marker, "autouse", False)
-                    marker_name = getattr(marker, "name", None)
-                    if marker_name is not None:
-                        fixture_name = marker_name
-                wrapped._oxytest_fixture = {
-                    "scope": scope,
-                    "params": params,
-                    "autouse": autouse,
-                    "name": fixture_name,
-                }
-                self.register(wrapped)
+            try:
+                obj = getattr(module, attr_name)
+            except Exception:
+                continue
+            try:
+                # Use getattr with sentinel instead of hasattr (hasattr doesn't catch RuntimeError from descriptors)
+                if getattr(obj, "_oxytest_fixture", None) is not None:
+                    self.register(obj)
+                elif getattr(obj, "_pytestfixturefunction", None) is not None or (getattr(obj, "__wrapped__", None) is not None and getattr(obj, "name", None) is not None):
+                    try:
+                        fixture_func = getattr(obj, "_fixture_function", None)
+                    except Exception:
+                        fixture_func = None
+                    if fixture_func is not None:
+                        wrapped = fixture_func
+                    else:
+                        try:
+                            wrapped = getattr(obj, "__wrapped__")
+                        except Exception:
+                            continue
+                    try:
+                        func_attr = getattr(wrapped, "__func__", None)
+                    except Exception:
+                        func_attr = None
+                    if func_attr is not None:
+                        wrapped = func_attr
+                    if not callable(wrapped):
+                        continue
+                    try:
+                        oxy_fix = getattr(wrapped, "_oxytest_fixture", None)
+                    except Exception:
+                        oxy_fix = None
+                    if oxy_fix is not None:
+                        continue
+                    mod = getattr(wrapped, "__module__", "")
+                    if mod.startswith(("pytest_benchmark", "pytest_codspeed")):
+                        continue
+                    scope = "function"
+                    params = None
+                    autouse = False
+                    fixture_name = attr_name
+                    try:
+                        marker = getattr(obj, "_fixture_function_marker", None)
+                    except Exception:
+                        marker = None
+                    if marker is not None:
+                        scope = getattr(marker, "scope", "function") or "function"
+                        raw_params = getattr(marker, "params", None)
+                        params = (
+                            [_unwrap_param(p) for p in raw_params]
+                            if raw_params is not None
+                            else None
+                        )
+                        autouse = getattr(marker, "autouse", False)
+                        marker_name = getattr(marker, "name", None)
+                        if marker_name is not None:
+                            fixture_name = marker_name
+                    wrapped._oxytest_fixture = {
+                        "scope": scope,
+                        "params": params,
+                        "autouse": autouse,
+                        "name": fixture_name,
+                    }
+                    self.register(wrapped)
+            except Exception:
+                continue
 
     def clear_registered(self):
         """Clear the set of known module ids (for cross-run hygiene)."""
