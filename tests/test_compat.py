@@ -222,8 +222,10 @@ def test_exit_code_enum():
     assert pytest.ExitCode.OK == 0
     assert pytest.ExitCode.TESTS_FAILED == 1
     assert pytest.ExitCode.INTERRUPTED == 2
+    assert pytest.ExitCode.INTERNAL_ERROR == 3
     assert pytest.ExitCode.USAGE_ERROR == 4
-    assert pytest.ExitCode.NO_TESTS_COLLECTED == 4
+    assert pytest.ExitCode.NO_TESTS_COLLECTED == 5
+    assert pytest.ExitCode.MAX_WARNINGS_ERROR == 6
 
 
 def test_format_assert_detail():
