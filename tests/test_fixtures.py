@@ -12,7 +12,6 @@ from oxytest._fixtures import (
     get_fixture_manager,
     register_fixture,
     fixture_registry,
-    _NOT_SET,
 )
 
 
@@ -631,7 +630,7 @@ def test_monkeypatch_undo_setattr_not_set_for_delattr():
     mp = MonkeyPatch()
     class Obj:
         pass
-    mp._saved.append(("setattr", Obj, "attr", _NOT_SET))
+    mp._saved.append(("setattr", Obj, "attr", MonkeyPatch._UNSET))
     Obj.attr = "stale"
     mp.undo()
     assert not hasattr(Obj, "attr")
@@ -798,7 +797,7 @@ def test_monkeypatch_undo_setattr_not_set():
     mp = MonkeyPatch()
     class Obj:
         pass
-    mp._saved.append(("setattr", Obj, "new_attr", _NOT_SET))
+    mp._saved.append(("setattr", Obj, "new_attr", MonkeyPatch._UNSET))
     Obj.new_attr = "value"
     mp.undo()
     assert not hasattr(Obj, "new_attr")
