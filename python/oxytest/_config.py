@@ -4,6 +4,7 @@ import configparser
 
 
 def load_config(path=None):
+    only_path = path is not None
     if path is None:
         path = _find_pyproject_toml()
     result = {}
@@ -24,9 +25,10 @@ def load_config(path=None):
             tool_oxytest = data.get("tool", {}).get("oxytest", {})
             if tool_oxytest:
                 result.update(tool_oxytest)
-    # Also read pytest.ini / setup.cfg / tox.ini
-    ini_config = _read_ini_config()
-    result = _merge_ini_config(result, ini_config)
+    # Merge pytest.ini / setup.cfg / tox.ini only when auto-detecting config
+    if not only_path:
+        ini_config = _read_ini_config()
+        result = _merge_ini_config(ini_config, result)
     return result
 
 

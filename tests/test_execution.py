@@ -356,8 +356,12 @@ def test_should_skip_module_level():
     from oxytest._compat import _should_skip
     def f():
         pass
+    class MockMark:
+        name = "skip"
+        args = ()
+        kwargs = {"reason": "module skip"}
     class MockMod:
-        pytestmark = "skip"
+        pytestmark = [MockMark()]
     assert _should_skip(f, mod=MockMod()) is not None
 
 
@@ -382,7 +386,7 @@ def test_is_xfail_with_mark():
 def test_terminal_reporter_basic():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest.types import TestResult
+    from oxytest._core import TestResult  # type: ignore
     result = TestResult()
     result.name = "test_foo"
     result.path = "test_foo.py"
@@ -396,7 +400,7 @@ def test_terminal_reporter_basic():
 def test_terminal_reporter_failed():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest.types import TestResult
+    from oxytest._core import TestResult  # type: ignore
     result = TestResult()
     result.name = "test_bar"
     result.path = "test_bar.py"
@@ -411,7 +415,7 @@ def test_terminal_reporter_failed():
 def test_terminal_reporter_skipped():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest.types import TestResult
+    from oxytest._core import TestResult  # type: ignore
     result = TestResult()
     result.name = "test_skip"
     result.path = "test_skip.py"
@@ -425,7 +429,7 @@ def test_terminal_reporter_skipped():
 def test_terminal_reporter_durations():
     from oxytest._compat import TerminalReporter
     reporter = TerminalReporter(tb_style="short")
-    from oxytest.types import TestResult
+    from oxytest._core import TestResult  # type: ignore
     for i in range(5):
         r = TestResult()
         r.name = f"test_{i}"

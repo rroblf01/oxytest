@@ -236,6 +236,8 @@ def test_find_pyproject_toml_parent_dir(tmp_path):
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text("[tool.oxytest]\nkey = \"val\"\n")
         result = _find_pyproject_toml()
-        assert result is None
+        # Function searches parent dir if not found in cwd
+        assert result is not None
+        assert "pyproject.toml" in result
     finally:
         os.chdir(old_cwd)
