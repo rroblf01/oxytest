@@ -1,3 +1,4 @@
+import pytest
 
 from oxytest._plugin import (
     PluginManager,
@@ -246,3 +247,30 @@ def test_plugin_manager_register_none():
     result = pm.register(None)
     # pluggy assigns a numeric name even for None
     assert result is not None
+
+
+# ── New 3.0.0 hook spec tests ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("hook_name", [
+    "pytest_runtest_setup",
+    "pytest_runtest_teardown",
+    "pytest_runtest_protocol",
+    "pytest_terminal_summary",
+    "pytest_collect_file",
+    "pytest_itemcollected",
+    "pytest_assertrepr_compare",
+    "pytest_load_initial_conftests",
+    "pytest_collect_module",
+    "pytest_make_parametrize_id",
+    "pytest_runtest_makereport",
+    "pytest_report_header",
+    "pytest_report_teststatus",
+    "pytest_exception_interact",
+    "pytest_enter_pdb",
+    "pytest_leave_pdb",
+])
+def test_new_hook_spec_exists(hook_name):
+    from oxytest._plugin import get_plugin_manager
+    pm = get_plugin_manager()
+    assert hasattr(pm.hook, hook_name)

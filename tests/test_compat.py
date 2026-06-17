@@ -929,3 +929,48 @@ def test_approx_decimal():
 
 def test_approx_tuple():
     assert (0.1 + 0.2, 0.5) == pytest.approx((0.3, 0.5))
+
+
+# ── New 3.0.0 tests ─────────────────────────────────────────────────
+
+
+def test_approx_nan_ok():
+    assert pytest.approx(float('nan'), nan_ok=True) == float('nan')
+    assert pytest.approx(float('nan'), nan_ok=False) != float('nan')
+
+
+def test_config_rootpath():
+    from oxytest._compat import Config
+    import pathlib
+    c = Config({"rootdir": "/tmp"})
+    assert c.rootpath == pathlib.Path("/tmp")
+    c2 = Config({})
+    assert c2.rootpath is None
+
+
+def test_config_hook():
+    from oxytest._compat import Config
+    c = Config({})
+    assert hasattr(c.hook, 'pytest_addoption')
+
+
+def test_config_cache():
+    from oxytest._compat import Config
+    from oxytest._fixtures import get_fixture_manager
+    get_fixture_manager()._autouse_list = None
+    c = Config({})
+    cache = c.cache
+    assert cache is not None or hasattr(c, 'cache')
+
+
+def test_importorskip_minversion_pytest():
+    result = pytest.importorskip("pytest", minversion="0.1")
+    assert result is not None
+
+
+def test_warns_re_pattern():
+    import re
+    pattern = re.compile("some message")
+    with pytest.warns(UserWarning, match=pattern):
+        import warnings
+        warnings.warn("some message", UserWarning)

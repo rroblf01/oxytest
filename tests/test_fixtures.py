@@ -976,3 +976,83 @@ def test_cleanup_tmpdirs():
 def test_capfd():
     capfd = _CaptureFDFixture()
     assert capfd is not None
+
+
+# ── New 3.0.0 fixture tests ─────────────────────────────────────────
+
+
+def test_fm_resolve_caplog():
+    fm = FixtureManager()
+    result = fm.resolve("caplog")
+    assert hasattr(result, 'records')
+    assert hasattr(result, 'text')
+    assert hasattr(result, 'messages')
+    assert hasattr(result, 'record_tuples')
+
+
+def test_fm_resolve_capsysbinary():
+    fm = FixtureManager()
+    result = fm.resolve("capsysbinary")
+    assert result is not None
+
+
+def test_fm_resolve_capfdbinary():
+    fm = FixtureManager()
+    result = fm.resolve("capfdbinary")
+    assert result is not None
+
+
+def test_fm_resolve_recwarn():
+    fm = FixtureManager()
+    result = fm.resolve("recwarn")
+    assert hasattr(result, 'list')
+    assert hasattr(result, 'pop')
+    assert hasattr(result, 'clear')
+
+
+def test_fm_resolve_doctest_namespace():
+    fm = FixtureManager()
+    result = fm.resolve("doctest_namespace")
+    assert result == {}
+
+
+def test_fm_resolve_tmp_path_factory():
+    fm = FixtureManager()
+    result = fm.resolve("tmp_path_factory")
+    assert hasattr(result, 'mktemp')
+    assert hasattr(result, 'getbasetemp')
+    tmp = result.mktemp("test")
+    assert tmp.exists()
+
+
+def test_fm_resolve_cache():
+    fm = FixtureManager()
+    result = fm.resolve("cache")
+    assert hasattr(result, 'get')
+    assert hasattr(result, 'set')
+    result.set("key", "val")
+    assert result.get("key") == "val"
+
+
+def test_fm_resolve_record_property():
+    fm = FixtureManager()
+    result = fm.resolve("record_property")
+    result("key", "value")
+    assert result.properties == [("key", "value")]
+
+
+def test_fm_resolve_subtests():
+    fm = FixtureManager()
+    result = fm.resolve("subtests")
+    assert hasattr(result, 'test')
+    with result.test(a=1):
+        pass
+
+
+def test_monkeypatch_context():
+    import os as _os
+    original = _os.path.sep
+    with MonkeyPatch.context() as mp:
+        mp.setattr("os.path.sep", "/custom")
+        assert _os.path.sep == "/custom"
+    assert _os.path.sep == original

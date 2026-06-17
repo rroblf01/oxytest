@@ -337,3 +337,43 @@ def test_plugin_flag(tmp_path):
     _write_test(tmp_path, "test_plugin.py", "def test_ok(): pass")
     code, _, _ = _run("-p", "sys", str(tmp_path))
     assert code == 0
+
+
+# ── New 3.0.0 E2E tests ─────────────────────────────────────────────
+
+
+def test_capture_no(tmp_path):
+    _write_test(tmp_path, "test_cap.py", "def test_ok(): pass")
+    code, stdout, _ = _run("--capture=no", "--tb=no", "-q", str(tmp_path))
+    assert code == 0
+
+
+def test_no_header(tmp_path):
+    _write_test(tmp_path, "test_nh.py", "def test_ok(): pass")
+    _, _, stderr = _run("--no-header", "--tb=no", "-q", str(tmp_path))
+    assert "oxytest: running tests" not in stderr
+
+
+def test_import_mode_prepend(tmp_path):
+    _write_test(tmp_path, "test_imp.py", "def test_ok(): pass")
+    code, stdout, _ = _run("--import-mode=prepend", "--tb=no", "-q", str(tmp_path))
+    assert code == 0
+
+
+def test_deselect(tmp_path):
+    _write_test(tmp_path, "test_a.py", "def test_a(): assert False")
+    _write_test(tmp_path, "test_b.py", "def test_b(): pass")
+    code, stdout, _ = _run("--deselect", str(tmp_path / "test_a.py"), "--tb=no", "-q", str(tmp_path))
+    assert code == 0
+
+
+def test_runxfail(tmp_path):
+    _write_test(tmp_path, "test_x.py", """
+        import pytest
+        @pytest.mark.xfail
+        def test_x(): assert False
+    """)
+    code, stdout, _ = _run("--runxfail", "--tb=no", "-q", str(tmp_path))
+    # --runxfail makes xfail tests run normally → they fail
+    assert code == 1
+    assert "failed" in stdout or "FAILED" in stdout

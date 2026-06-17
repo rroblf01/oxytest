@@ -1,57 +1,107 @@
 # Changelog
 
-## [2.0.0] - 2026-06-16
+## [3.0.0] — 2026-06-17
 
 ### Added
-- **Coverage support**: `--cov[=SOURCE]`, `--cov-report`, `--cov-config`, `--cov-branch`, `--cov-fail-under`, `--cov-append`. Coverage.py is an optional dependency (`pip install oxytest[cov]`). Also documented `coverage run -m oxytest` for zero-config usage.
-- **VSCode compatibility**: Built-in `_vscode.py` plugin that implements the JSON-RPC 2.0 protocol over named pipes. Activated automatically when VSCode runs `-p vscode_pytest`. Supports test discovery (tree with folder/file/class/test nodes) and real-time execution results.
-- **Boolean keyword expressions**: `-k "not slow and (test_user or test_api)"` now works with `and`, `or`, `not`, and parentheses. Evaluates against test name and markers.
-- **pyproject.toml configuration**: oxytest reads `[tool.oxytest]` section for `addopts`, `testpaths`, `ignore`, and `markers`. CLI flags take precedence.
-- **`--pdb` / `--trace`**: Drop into the debugger on test failure (`--pdb`) or before each test (`--trace`).
-- **Phase 1 - Bug fixes**: `-n auto`, `--tb=value` parsing, yield fixture teardown, `autouse=True`, `usefixtures` on classes, `capsys.stop()` on cleanup.
-- **Phase 2 - Plugin system**: pluggy-based plugin system with `hookimpl`/`hookspec`, `Config`, `Parser`, `PluginManager`, conftest plugin loading, entry point plugins (`pytest11`), `-p PLUGIN` flag.
-- **Phase 3 - Core features**:
-  - `--ignore`, `--collect-only`/`--co`, `--durations`, `-r`, `--showlocals`, `--strict-markers`, `--rootdir`, `--fixtures`, `--markers`, `--setup-show`, `--cache-clear`, `--lf`/`--last-failed`, `--ff`/`--failed-first`.
-  - Assert rewriting with comparison diffs.
-  - JUnit XML: `<system-out>`, `<system-err>`, `timestamp`.
-  - `--setup-show`: fixture setup/teardown tracing.
-  - `--showlocals`: local variable display on failure.
-  - Cache system with `.pytest_cache/oxytest/lastfailed`.
-  - `-rA` now lists individual test names.
-- **Migration tool**: `oxytest migrate [PATH]` with `--dry-run`, `--check`, `--reverse`. Handles multi-module imports, aliases, comments.
-- **CI**: Windows + macOS matrix (3.11, 3.13, 3.14). Linux matrix (3.10–3.14). Lint job with ruff + ty.
-- **Docs**: Complete English and Spanish documentation on mkdocs.
-- **Rust optimizations**: Parallel test file discovery (Rayon par_iter), reusable global thread pool, reduced TestItem cloning in runner, lazy file filtering in walkdir.
-- **Rust tests**: 22 unit tests across types.rs, discovery.rs, runner.rs.
-- **Rust benchmarks**: criterion benchmarks for TestItem/TestResult creation, cloning, grouping, and is_test_file.
-- **Python test suite**: expanded from 347 to 432 tests (+85), raising coverage from 62% to 80%.
+
+#### CLI flags
+- `--no-header` — suppress the "oxytest: running tests" banner
+- `--capture=<method>` — set capture method (`fd`, `sys`, `tee-sys`, `tee-fd`, `no`)
+- `--show-capture` — control which output to show on failures
+- `--deselect` — exclude specific tests
+- `-W` / `--pythonwarnings` — set warning filters from CLI
+- `--import-mode` — control `sys.path` behavior (`prepend`, `append`, `importlib`)
+- `--ignore-glob` — ignore test files matching glob patterns
+- `--continue-on-collection-errors` — don't abort on collection errors
+- `--log-level`, `--log-format`, `--log-cli-level` — logging configuration
+- `--color` — force color output (`yes`, `no`, `auto`)
+- `--code-highlight` — enable code highlighting in tracebacks
+- `--stepwise-skip` — skip the first failure in stepwise mode
+- `--full-trace` — show full tracebacks (no truncation)
+- `--setup-only`, `--setup-plan` — trace fixture setup without running tests
+- `--verbosity` counter (`-vvv`) — fine-grained verbosity
+
+#### Fixtures (built-in)
+- `recwarn` — warning recording fixture (`list`, `pop`, `clear`)
+- `capsysbinary` — binary stdout/stderr capture
+- `capfdbinary` — binary FD-level capture
+- `doctest_namespace` — namespace dict for doctests
+- `tmp_path_factory` — session-scoped temporary directory factory
+
+#### Plugin hooks
+- `pytest_collect_module` — customize test module collection
+- `pytest_make_parametrize_id` — generate parametrize IDs
+- `pytest_runtest_makereport` — create test reports
+- `pytest_report_header` — add lines to terminal header
+- `pytest_report_teststatus` — customize short status labels
+- `pytest_exception_interact` — handle exceptions interactively
+- `pytest_enter_pdb`, `pytest_leave_pdb` — pdb lifecycle hooks
+
+#### Warning hierarchy
+- `PytestRemovedIn10Warning`, `PytestExperimentalApiWarning`,
+  `PytestAssertRewriteWarning`, `PytestCacheWarning`, `PytestConfigWarning`,
+  `PytestCollectionWarning`, `PytestReturnNotNoneWarning`,
+  `PytestUnknownMarkWarning`, `PytestUnraisableExceptionWarning`,
+  `PytestUnhandledThreadExceptionWarning`, `PytestFDWarning`
+
+#### API
+- `MonkeyPatch.context()` — context manager classmethod
+- `Config.rootpath` — `pathlib.Path` version of `rootdir`
+- `Config.hook` — access to plugin hook system
+- `Config.cache` — access to cache fixture
+- `ExceptionInfo.type` — exception type from `pytest.raises`
+- `pytest.approx` now supports `nan_ok=True`, `Decimal`, `datetime`, `Timedelta`
+- `pytest.warns` accepts `re.Pattern` as `match` argument
+- `pytest.raises` `.type` property
+
+#### Compatibility
+- `pytest_plugins` variable in conftest.py now loads plugins
+- `record_property` fixture data emitted in JUnit XML output
+- `pytest_terminal_summary` hook called before session finish
 
 ### Fixed
-- Walkdir root filtering bug (`e.depth() == 0` guard).
-- `ApproxDecimal.__eq__` implementation.
-- `Cargo.lock` gitignored.
-- Test commands: `python -m` instead of `uv run` for Windows compatibility.
-- Windows glob in CI: uses explicit `--ignore` instead of shell glob.
-- `_CaptureFixture.readouterr()` now returns an object with `.out`/`.err` attributes (also supports tuple unpacking for backward compatibility).
-- `_fixture_capsys` auto-starts on fixture resolution (was requiring manual `.start()` call).
-- `MonkeyPatch.setattr` saves after successful `setattr`, not before (prevents stale undo records on failure).
-- `register_from_module` unwraps bound methods from `__wrapped__` before setting `_oxytest_fixture`.
-- `_filter_keyword_expression` handles missing/None file paths gracefully.
-- `_write_junitxml` now includes all test results (not only failures/skips).
-- `hookspec()` no longer passes unsupported kwargs to HookspecMarker.
-- `PluginManager.register()` now tracks plugins in `_plugins` list.
-- `migrate()` returns exit code 1 when changes are made (not only in `--check` mode).
-- `_build_test_tree` in `_vscode.py` correctly assigns class name (`parts[0]`) instead of method name.
-- `--coverage` documented as `--cov` in migration docs (inaccurate reference).
+- `--trace`: now enters pdb before each test (previously only set env var)
+- `--runxfail`: now replaces `pytest.xfail` with no-op (like pytest does)
+- `--override-ini`: KEY=VALUE format properly applied to `Config._inicfg`
+- `--confcutdir`: now limits conftest.py search to specified directory
+- `--strict-config`: option is now properly consumed
+- `--import-mode`: now affects `sys.path.insert` vs `append` behavior
+- `--capture=no`: now properly sets `nocapture=True`
+- `MonkeyPatch.setattr`: descriptor handling via `target.__dict__`
+- `_SubTestFixture.__exit__`: catches only `AssertionError` (not all `Exception`)
+- `ExitCode` values: renumbered to match pytest exactly
 
-### Changed
-- Version bumped from `1.0.0` → `2.0.0`.
-- `pyproject.toml`: Development Status → Production/Stable. Added `Typing :: Typed` classifier.
-- CI: docs deploy chains after publish via `workflow_run`.
-- `uv pip install --system` (no venv) for test jobs.
-- Rust runner uses global Rayon thread pool instead of creating a new pool per `run_tests` call.
-- Rust discovery now processes test files in parallel using Rayon.
-- `.gitignore` updated to exclude coverage artifacts (`.coverage`, `htmlcov/`, `coverage/`).
+### Performance
+- `inspect.signature()` cached per function via `__signature__`
+- Module-level imports hoisted out of hot function body
+- `_import_lock` conditional — only acquired on cache miss
+- `os.path.relpath()` results cached per filepath
+- `setrecursionlimit` conditional — only set if not already at target
+- Autouse fixture list cached — avoids full fixture scan per test
+- Thread-local `FixtureManager` and `_conftest_seen` for safe parallel execution
+- `is_test_file()` fixed to reject non-`.py` files
 
 ### Removed
-- `UV_PYTHON_PREFERENCE` env var from CI.
+- `_NOT_SET` sentinel (replaced by `MonkeyPatch._UNSET`)
+
+## [2.0.0] — 2026-06-07
+
+### Added
+- `caplog` fixture with `records`, `text`, `messages`, `record_tuples`
+- `pytest.mark.filterwarnings` support with `action:message:category` format
+- `pytest.ini` / `setup.cfg` / `tox.ini` parsing
+- `--override-ini`, `--confcutdir`, `--basetemp` CLI flags
+- `--collect-only` / `--co` support
+- `record_property`, `record_xml_attribute`, `record_testsuite_property`, `cache` fixtures
+- `pytest_runtest_setup`, `pytest_runtest_teardown`, `pytest_runtest_protocol` hooks
+- Import-time assertion rewriting via `_RewriteLoader`
+- `register_assert_rewrite()` public API
+- Multiprocessing worker pool for parallel execution (`-n` flag)
+
+### Fixed
+- `func.pytestmark` detection for `@pytest.mark.parametrize` from real pytest
+- Kwargs-style `@pytest.mark.parametrize(argnames=..., argvalues=...)`
+- Phase 2 transitive fixture dependency resolution
+- `ParameterSet` unwrap for IDs and values
+- Session-scoped generator preservation across function cleanup
+- `MonkeyPatch.setattr` pytest semantics for dotted strings

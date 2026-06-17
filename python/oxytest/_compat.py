@@ -1013,7 +1013,7 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         elif arg == "--override-ini" and i + 1 < len(args):
             i += 1
             parsed["override_ini"] = args[i]
-        elif arg == "--override-ini=":
+        elif arg.startswith("--override-ini="):
             parsed["override_ini"] = arg.split("=", 1)[1]
         elif arg == "--deselect" and i + 1 < len(args):
             i += 1
@@ -1268,6 +1268,7 @@ def _run_tests(
     no_header: bool = False,
     import_mode: str = "append",
     capture: Optional[str] = None,
+    deselect: Optional[list] = None,
 ) -> int:
     pm = None
     if config is not None:
@@ -1339,6 +1340,16 @@ def _run_tests(
         )
 
     all_tests = _expand_parametrize(all_tests)
+
+    # Apply --deselect filter (remove matching tests by path or name)
+    if deselect:
+        _deselect_set = set(os.path.abspath(d) if os.path.isfile(d) else d for d in deselect)
+        all_tests = [
+            t for t in all_tests
+            if os.path.abspath(t.path) not in _deselect_set
+            and t.path not in _deselect_set
+            and t.name not in _deselect_set
+        ]
 
     if strict_markers:
         _validate_markers(all_tests)
@@ -1876,6 +1887,7 @@ def main(args: Optional[List[str]] = None) -> int:
         no_header=opts.get("no_header", False),
         import_mode=opts.get("import_mode", "append"),
         capture=opts.get("capture", None),
+        deselect=opts.get("deselect", None),
     )
 
     if cov_plugin:

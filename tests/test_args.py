@@ -231,4 +231,119 @@ def test_parse_combined():
 
 def test_parse_ignore_unknown():
     opts = _parse_args(["--unknown-flag"])
-    assert opts is not None  # should not crash
+    assert opts is not None
+
+
+# ── New 3.0.0 CLI flag tests ────────────────────────────────────────
+
+
+def test_parse_no_header():
+    opts = _parse_args(["--no-header"])
+    assert opts["no_header"] is True
+
+
+def test_parse_capture():
+    opts = _parse_args(["--capture", "fd"])
+    assert opts["capture"] == "fd"
+    opts2 = _parse_args(["--capture", "no"])
+    assert opts2["capture"] == "no"
+
+
+def test_parse_show_capture():
+    opts = _parse_args(["--show-capture", "all"])
+    assert opts["show_capture"] == "all"
+
+
+def test_parse_deselect():
+    opts = _parse_args(["--deselect", "test_foo.py"])
+    assert "test_foo.py" in opts["deselect"]
+
+
+def test_parse_W():
+    opts = _parse_args(["-W", "ignore"])
+    assert "ignore" in opts["pythonwarnings"]
+
+
+def test_parse_import_mode():
+    opts = _parse_args(["--import-mode", "prepend"])
+    assert opts["import_mode"] == "prepend"
+
+
+def test_parse_ignore_glob():
+    opts = _parse_args(["--ignore-glob", "*.pyc"])
+    assert "*.pyc" in opts["ignore_glob"]
+
+
+def test_parse_continue_on_collection_errors():
+    opts = _parse_args(["--continue-on-collection-errors"])
+    assert opts["continue_on_collection_errors"] is True
+
+
+def test_parse_log_level():
+    opts = _parse_args(["--log-level", "DEBUG"])
+    assert opts["log_level"] == "DEBUG"
+
+
+def test_parse_log_format():
+    opts = _parse_args(["--log-format", "%(message)s"])
+    assert opts["log_format"] == "%(message)s"
+
+
+def test_parse_log_cli_level():
+    opts = _parse_args(["--log-cli-level", "INFO"])
+    assert opts["log_cli_level"] == "INFO"
+
+
+def test_parse_color():
+    opts = _parse_args(["--color", "yes"])
+    assert opts["color"] == "yes"
+
+
+def test_parse_code_highlight():
+    opts = _parse_args(["--code-highlight"])
+    assert opts["code_highlight"] is True
+
+
+def test_parse_stepwise_skip():
+    opts = _parse_args(["--stepwise-skip"])
+    assert opts["stepwise_skip"] is True
+
+
+def test_parse_full_trace():
+    opts = _parse_args(["--full-trace"])
+    assert opts["full_trace"] is True
+
+
+def test_parse_setup_only():
+    opts = _parse_args(["--setup-only"])
+    assert opts["setup_only"] is True
+
+
+def test_parse_setup_plan():
+    opts = _parse_args(["--setup-plan"])
+    assert opts["setup_plan"] is True
+
+
+def test_parse_cov_config():
+    opts = _parse_args(["--cov-config", ".coveragerc"])
+    assert opts["cov_config"] == ".coveragerc"
+
+
+def test_parse_cov_branch():
+    opts = _parse_args(["--cov-branch"])
+    assert opts["cov_branch"] is True
+
+
+def test_parse_cov_fail_under():
+    opts = _parse_args(["--cov-fail-under", "80"])
+    assert opts["cov_fail_under"] == 80.0
+
+
+def test_parse_cov_append():
+    opts = _parse_args(["--cov-append"])
+    assert opts["cov_append"] is True
+
+
+def test_parse_override_ini_equals():
+    opts = _parse_args(["--override-ini=filterwarnings=error"])
+    assert opts["override_ini"] == "filterwarnings=error"
