@@ -2059,6 +2059,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
 
     # 1. Import module (cached per filepath) — with lock for parallel safety
     filepath = os.path.join(_original_cwd, path) if not os.path.isabs(path) else path
+    filepath = os.path.normpath(filepath)
     dirpath = os.path.dirname(filepath)
 
     if filepath not in _module_cache:
