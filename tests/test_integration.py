@@ -32,7 +32,7 @@ def _write_conftest(tmpdir, content):
 def test_version():
     code, out, _ = _run("--version")
     assert code == 0
-    assert "2.0.0" in out
+    assert "3.0.0" in out
 
 
 def test_help():

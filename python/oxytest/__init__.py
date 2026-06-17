@@ -26,6 +26,17 @@ from oxytest._compat import (
     Parser,
     PytestDeprecationWarning,
     PytestWarning,
+    PytestRemovedIn10Warning,
+    PytestExperimentalApiWarning,
+    PytestAssertRewriteWarning,
+    PytestCacheWarning,
+    PytestConfigWarning,
+    PytestCollectionWarning,
+    PytestReturnNotNoneWarning,
+    PytestUnknownMarkWarning,
+    PytestUnraisableExceptionWarning,
+    PytestUnhandledThreadExceptionWarning,
+    PytestFDWarning,
     ExitCode,
     warns,
     deprecated_call,
@@ -43,7 +54,7 @@ from oxytest._plugin import (
     hookspec,
 )
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 __all__ = [
     "main",
@@ -83,6 +94,17 @@ __all__ = [
     "Parser",
     "PytestDeprecationWarning",
     "PytestWarning",
+    "PytestRemovedIn10Warning",
+    "PytestExperimentalApiWarning",
+    "PytestAssertRewriteWarning",
+    "PytestCacheWarning",
+    "PytestConfigWarning",
+    "PytestCollectionWarning",
+    "PytestReturnNotNoneWarning",
+    "PytestUnknownMarkWarning",
+    "PytestUnraisableExceptionWarning",
+    "PytestUnhandledThreadExceptionWarning",
+    "PytestFDWarning",
     "ExitCode",
     "warns",
     "deprecated_call",

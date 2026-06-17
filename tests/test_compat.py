@@ -132,7 +132,7 @@ def test_main_version():
 def test_version_string():
     from oxytest import __version__
     assert isinstance(__version__, str)
-    assert __version__ == "2.0.0"
+    assert __version__ == "3.0.0"
 
 
 def test_test_item_repr():
@@ -222,7 +222,7 @@ def test_exit_code_enum():
     assert pytest.ExitCode.OK == 0
     assert pytest.ExitCode.TESTS_FAILED == 1
     assert pytest.ExitCode.INTERRUPTED == 2
-    assert pytest.ExitCode.USAGE_ERROR == 3
+    assert pytest.ExitCode.USAGE_ERROR == 4
     assert pytest.ExitCode.NO_TESTS_COLLECTED == 4
 
 

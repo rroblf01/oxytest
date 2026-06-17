@@ -78,6 +78,11 @@ def pytest_runtest_protocol(item: Any, nextitem: Any = None):
     Returns True if no further processing should happen."""
 
 
+@_hook_spec
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int):
+    """Called after the terminal summary is printed."""
+
+
 # ---------------------------------------------------------------------------
 # Plugin manager
 # ---------------------------------------------------------------------------

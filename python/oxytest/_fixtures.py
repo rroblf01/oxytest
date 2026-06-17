@@ -10,6 +10,7 @@ import logging
 import importlib
 import threading
 from typing import Any, Callable, Dict, Generator, Optional, cast, Union
+from contextlib import contextmanager
 
 
 class FixtureDef:
@@ -66,6 +67,10 @@ class FixtureManager:
         self.register_builtin("record_testsuite_property", self._fixture_record_testsuite_property, scope="function")
         self.register_builtin("cache", self._fixture_cache, scope="session")
         self.register_builtin("subtests", self._fixture_subtests, scope="function")
+        self.register_builtin("capsysbinary", self._fixture_capsysbinary, scope="function")
+        self.register_builtin("capfdbinary", self._fixture_capfdbinary, scope="function")
+        self.register_builtin("recwarn", self._fixture_recwarn, scope="function")
+        self.register_builtin("doctest_namespace", self._fixture_doctest_namespace, scope="session")
         self._setup_third_party_fixtures()
 
     def _setup_third_party_fixtures(self):
@@ -368,8 +373,23 @@ class FixtureManager:
         yield cf
         cf.stop()
 
+    def _fixture_capsysbinary(self):
+        cf = _CaptureFixture(binary=True)
+        cf.start()
+        yield cf
+        cf.stop()
+
     def _fixture_capfd(self):
         return _CaptureFDFixture()
+
+    def _fixture_capfdbinary(self):
+        return _CaptureFDFixture(binary=True)
+
+    def _fixture_recwarn(self):
+        return _WarningsRecorder()
+
+    def _fixture_doctest_namespace(self):
+        return {}
 
     def _fixture_monkeypatch(self):
         mp = MonkeyPatch()
@@ -596,16 +616,24 @@ class MockerFixture:
 
 
 class _CaptureFixture:
-    def __init__(self):
+    def __init__(self, binary=False):
+        self._binary = binary
         self._old_stdout = None
         self._old_stderr = None
-        self._stringio = io.StringIO()
+        self._buffer = io.BytesIO() if binary else io.StringIO()
 
     def start(self):
         self._old_stdout = sys.stdout
         self._old_stderr = sys.stderr
-        sys.stdout = self._stringio
-        sys.stderr = self._stringio
+        if self._binary:
+            import io as _io_bin
+            self._stringio = _io_bin.TextIOWrapper(self._buffer)  # type: ignore
+            sys.stdout = self._stringio
+            sys.stderr = self._stringio
+        else:
+            self._stringio = self._buffer
+            sys.stdout = self._buffer
+            sys.stderr = self._buffer
 
     def stop(self):
         if self._old_stdout is not None:
@@ -614,7 +642,13 @@ class _CaptureFixture:
             sys.stderr = self._old_stderr
 
     def readouterr(self):
-        out = self._stringio.getvalue()
+        if self._binary:
+            self._buffer.seek(0)
+            out = self._buffer.read()
+            err = b""
+        else:
+            out = self._buffer.getvalue() if hasattr(self, '_buffer') else ""
+            err = ""
         class _CaptureResult:
             def __init__(self, out_val, err_val):
                 self.out = out_val
@@ -623,15 +657,51 @@ class _CaptureFixture:
                 return (self.out, self.err)[i]
             def __iter__(self):
                 return iter((self.out, self.err))
-        return _CaptureResult(out, "")
+        return _CaptureResult(out, err)
+
+
+class _WarningsRecorder:
+    def __init__(self):
+        import warnings
+        self._warnings = warnings.catch_warnings(record=True)
+        self._list = self._warnings.__enter__()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self._warnings.__exit__(*exc_info)
+
+    @property
+    def list(self):
+        return self._list
+
+    def __getitem__(self, i):
+        return self._list[i]
+
+    def __iter__(self):
+        return iter(self._list)
+
+    def __len__(self):
+        return len(self._list)
+
+    def pop(self, cls=Warning):
+        for i, w in enumerate(self._list):
+            if issubclass(w.category, cls):
+                return self._list.pop(i)
+        return None
+
+    def clear(self):
+        self._list.clear()
 
 
 class _CaptureFDFixture:
-    def __init__(self):
+    def __init__(self, binary=False):
+        self._binary = binary
         self._captured = None
 
     def start(self):
-        self._captured = io.StringIO()
+        self._captured = io.BytesIO() if self._binary else io.StringIO()
 
     def stop(self):
         pass
@@ -649,6 +719,15 @@ class MonkeyPatch:
 
     def __init__(self):
         self._saved = []
+
+    @classmethod
+    @contextmanager
+    def context(cls) -> Generator['MonkeyPatch', None, None]:
+        mp = cls()
+        try:
+            yield mp
+        finally:
+            mp.undo()
 
     def setattr(self, target, name=_MONKEY_UNSET, value=_MONKEY_UNSET, raising=True):
         # Support dotted string target like pytest: setattr("module.attr", value)

@@ -201,8 +201,10 @@ class ExitCode(enum.IntEnum):
     OK = 0
     TESTS_FAILED = 1
     INTERRUPTED = 2
-    USAGE_ERROR = 3
-    NO_TESTS_COLLECTED = 4
+    INTERNAL_ERROR = 3
+    USAGE_ERROR = 4
+    NO_TESTS_COLLECTED = 5
+    MAX_WARNINGS_ERROR = 6
 
 
 def warns(expected_warning, *args, match=None):
@@ -301,6 +303,50 @@ class PytestWarning(UserWarning):
 
 class PytestDeprecationWarning(FutureWarning):
     """Warning for deprecated pytest features."""
+
+
+class PytestRemovedIn10Warning(PytestDeprecationWarning):
+    """Warning for features removed in pytest 10."""
+
+
+class PytestExperimentalApiWarning(FutureWarning):
+    """Warning for experimental pytest APIs."""
+
+
+class PytestAssertRewriteWarning(PytestWarning):
+    """Warning about assertion rewriting."""
+
+
+class PytestCacheWarning(PytestWarning):
+    """Warning about cache."""
+
+
+class PytestConfigWarning(PytestWarning):
+    """Warning about configuration."""
+
+
+class PytestCollectionWarning(PytestWarning):
+    """Warning about test collection."""
+
+
+class PytestReturnNotNoneWarning(PytestWarning):
+    """Warning about test functions returning non-None."""
+
+
+class PytestUnknownMarkWarning(PytestWarning):
+    """Warning about unknown markers."""
+
+
+class PytestUnraisableExceptionWarning(PytestWarning):
+    """Warning about unraisable exceptions."""
+
+
+class PytestUnhandledThreadExceptionWarning(PytestWarning):
+    """Warning about unhandled thread exceptions."""
+
+
+class PytestFDWarning(PytestWarning):
+    """Warning about leaked file descriptors."""
 
 
 def skip(reason: str = "", **kwargs) -> None:
@@ -1121,6 +1167,7 @@ def _run_tests(
     trace: bool = False,
     marker_expr: Optional[str] = None,
     cov_plugin=None,
+    confcutdir: Optional[str] = None,
 ) -> int:
     pm = None
     if config is not None:
@@ -1162,10 +1209,10 @@ def _run_tests(
         if ignore:
             tests = [t for t in tests if not _is_ignored(t.path, ignore)]
         all_tests.extend(tests)
-        _load_conftest(path, config=config)
+        _load_conftest(path, config=config, confcutdir=confcutdir)
         for _test in tests:
             _tdir = os.path.dirname(os.path.abspath(_test.path))
-            _load_conftest(_tdir, config=config)
+            _load_conftest(_tdir, config=config, confcutdir=confcutdir)
 
     if has_expr:
         all_tests = _filter_keyword_expression(all_tests, keyword)
@@ -1217,6 +1264,7 @@ def _run_tests(
         os.environ["OXYTEST_PDB"] = "1"
     if trace:
         os.environ["OXYTEST_TRACE"] = "1"
+        os.environ["OXYTEST_PDB"] = "1"
 
     if cov_plugin:
         cov_plugin.start()
@@ -1279,6 +1327,9 @@ def _run_tests(
 
     if junitxml:
         _write_junitxml(reporter, junitxml)
+
+    if pm:
+        pm.hook.pytest_terminal_summary(terminalreporter=reporter, exitstatus=reporter.get_exit_code())
 
     exitcode = reporter.get_exit_code()
 
@@ -1630,6 +1681,13 @@ def main(args: Optional[List[str]] = None) -> int:
     pm.load_entry_point_plugins()
 
     config = Config(opts)
+    # Apply --override-ini if provided
+    override_ini = opts.get("override_ini")
+    if override_ini:
+        for pair in override_ini.split(","):
+            if "=" in pair:
+                key, val = pair.split("=", 1)
+                config._inicfg[key.strip()] = val.strip()
     for plugin_name in opts.get("plugins", []):
         pm.load_plugin_by_name(plugin_name)
 
@@ -1679,6 +1737,7 @@ def main(args: Optional[List[str]] = None) -> int:
         trace=opts.get("trace", False),
         marker_expr=opts.get("marker_expr", None),
         cov_plugin=cov_plugin,
+        confcutdir=opts.get("confcutdir", None),
     )
 
     if cov_plugin:
@@ -1687,7 +1746,7 @@ def main(args: Optional[List[str]] = None) -> int:
     return exitcode
 
 
-def _load_conftest(root_dir: str, config: Optional['Config'] = None):
+def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir: Optional[str] = None):
     """Load conftest.py files from the given directory and its parents."""
     from oxytest._fixtures import get_fixture_manager
     from oxytest._plugin import get_plugin_manager
@@ -1709,6 +1768,9 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None):
         seen = set()
         _conftest_seen.dirs = seen
     while dirpath != "/" and dirpath not in seen:
+        # Stop if we've reached the confcutdir boundary
+        if confcutdir and os.path.abspath(dirpath) == os.path.abspath(confcutdir):
+            break
         seen.add(dirpath)
         conftest_path = os.path.join(dirpath, "conftest.py")
         if os.path.isfile(conftest_path):
@@ -2069,6 +2131,10 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     _runxfail = getattr(fm._config, 'getoption', lambda *a: False)('runxfail', False)
     if _runxfail:
         xfail_reason = None
+        # Replace pytest.xfail with a no-op (like pytest does)
+        import oxytest as _ox
+        _ox.xfail = lambda *a, **kw: None  # type: ignore
+        _ox.xfail.Exception = type('XFailed', (Exception,), {})  # type: ignore
 
     # 5. Run test protocol with hooks
     from oxytest._plugin import get_plugin_manager as _get_pm
@@ -2078,6 +2144,10 @@ def _execute_test_impl(path: str, name: str, args_json: str):
     if not _handled or not any(_handled):
         _pm.hook.pytest_runtest_setup(item=_runtest_item)
         _pm.hook.pytest_runtest_call(item=_runtest_item)
+    # --trace: enter pdb before each test
+    if os.environ.get("OXYTEST_TRACE") == "1":
+        import pdb as _pdb
+        _pdb.set_trace()
     try:
         if xfail_reason is not None:
             try:
