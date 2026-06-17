@@ -274,3 +274,224 @@ def test_json_safe_bytes_in_list():
     result = _json_safe([b"hello", "world"])
     assert isinstance(result[0], str)
     assert result[1] == "world"
+
+
+# ── _parse_filterwarnings_args tests ─────────────────────────────────
+
+
+def test_parse_filterwarnings_simple():
+    from oxytest._compat import _parse_filterwarnings_args
+    result = _parse_filterwarnings_args(["ignore"])
+    assert result is not None
+    args, kwargs = result
+    assert args[0] == "ignore"
+
+
+def test_parse_filterwarnings_colon_format():
+    from oxytest._compat import _parse_filterwarnings_args
+    result = _parse_filterwarnings_args(["ignore::DeprecationWarning"])
+    assert result is not None
+    args, kwargs = result
+    assert args[0] == "ignore"
+    assert kwargs.get("category") is DeprecationWarning
+
+
+def test_parse_filterwarnings_full():
+    from oxytest._compat import _parse_filterwarnings_args
+    result = _parse_filterwarnings_args(["ignore:message.*:UserWarning"])
+    assert result is not None
+    args, kwargs = result
+    assert args[0] == "ignore"
+    assert kwargs.get("message") == "message.*"
+
+
+def test_parse_filterwarnings_empty():
+    from oxytest._compat import _parse_filterwarnings_args
+    assert _parse_filterwarnings_args([]) is None
+
+
+def test_parse_filterwarnings_already_parsed():
+    from oxytest._compat import _parse_filterwarnings_args
+    result = _parse_filterwarnings_args(["ignore", "", UserWarning])
+    assert result is not None
+    args, kwargs = result
+    assert kwargs.get("category") is UserWarning
+
+
+# ── _should_skip / _is_xfail tests ───────────────────────────────────
+
+
+def test_should_skip_no_marks():
+    from oxytest._compat import _should_skip
+    def f():
+        pass
+    assert _should_skip(f) is None
+
+
+def test_should_skip_with_mark():
+    from oxytest._compat import _should_skip
+    def f():
+        pass
+    f._oxytest_marks = [("skip", (), {"reason": "test skip"})]
+    assert _should_skip(f) == "test skip"
+
+
+def test_should_skip_skipif_true():
+    from oxytest._compat import _should_skip
+    def f():
+        pass
+    f._oxytest_marks = [("skipif", (True,), {"reason": "condition met"})]
+    assert _should_skip(f) == "condition met"
+
+
+def test_should_skip_skipif_false():
+    from oxytest._compat import _should_skip
+    def f():
+        pass
+    f._oxytest_marks = [("skipif", (False,), {"reason": "not met"})]
+    assert _should_skip(f) is None
+
+
+def test_should_skip_module_level():
+    from oxytest._compat import _should_skip
+    def f():
+        pass
+    class MockMod:
+        pytestmark = "skip"
+    assert _should_skip(f, mod=MockMod()) is not None
+
+
+def test_is_xfail_no_marks():
+    from oxytest._compat import _is_xfail
+    def f():
+        pass
+    assert _is_xfail(f) is None
+
+
+def test_is_xfail_with_mark():
+    from oxytest._compat import _is_xfail
+    def f():
+        pass
+    f._oxytest_marks = [("xfail", (), {"reason": "known issue"})]
+    assert _is_xfail(f) is not None
+
+
+# ── TerminalReporter tests ───────────────────────────────────────────
+
+
+def test_terminal_reporter_basic():
+    from oxytest._compat import TerminalReporter
+    reporter = TerminalReporter(tb_style="short")
+    from oxytest.types import TestResult
+    result = TestResult()
+    result.name = "test_foo"
+    result.path = "test_foo.py"
+    result.duration_ms = 10
+    result.passed = True
+    reporter.add_result(result)
+    assert reporter.stats["passed"] == 1
+    assert reporter.get_exit_code() == 0
+
+
+def test_terminal_reporter_failed():
+    from oxytest._compat import TerminalReporter
+    reporter = TerminalReporter(tb_style="short")
+    from oxytest.types import TestResult
+    result = TestResult()
+    result.name = "test_bar"
+    result.path = "test_bar.py"
+    result.duration_ms = 5
+    result.passed = False
+    result.error = "test error"
+    reporter.add_result(result)
+    assert reporter.stats["failed"] == 1
+    assert reporter.get_exit_code() == 1
+
+
+def test_terminal_reporter_skipped():
+    from oxytest._compat import TerminalReporter
+    reporter = TerminalReporter(tb_style="short")
+    from oxytest.types import TestResult
+    result = TestResult()
+    result.name = "test_skip"
+    result.path = "test_skip.py"
+    result.duration_ms = 0
+    result.passed = True
+    result.skipped = True
+    reporter.add_result(result)
+    assert reporter.stats["skipped"] == 1
+
+
+def test_terminal_reporter_durations():
+    from oxytest._compat import TerminalReporter
+    reporter = TerminalReporter(tb_style="short")
+    from oxytest.types import TestResult
+    for i in range(5):
+        r = TestResult()
+        r.name = f"test_{i}"
+        r.path = f"test_{i}.py"
+        r.duration_ms = i * 100
+        r.passed = True
+        reporter.add_result(r)
+    # Should not raise
+    import io
+    out = io.StringIO()
+    try:
+        reporter.finish(out, durations=2)
+    finally:
+        out.close()
+
+
+# ── _validate_markers tests ──────────────────────────────────────────
+
+
+def test_validate_markers_empty():
+    from oxytest._compat import _validate_markers
+    _validate_markers([])
+
+
+def test_validate_markers_known():
+    from oxytest._compat import _validate_markers
+    class MockTest:
+        def __init__(self):
+            self.path = __file__
+            self.name = "test_validate_markers_empty"
+    _validate_markers([MockTest()])
+
+
+# ── _is_ignored tests ────────────────────────────────────────────────
+
+
+def test_is_ignored():
+    from oxytest._compat import _is_ignored
+    assert _is_ignored("/tmp/tests/foo.py", ["/tmp/tests"])
+    assert not _is_ignored("/tmp/src/foo.py", ["/tmp/tests"])
+
+
+def test_is_ignored_with_subdir():
+    from oxytest._compat import _is_ignored
+    assert _is_ignored("/tmp/tests/sub/foo.py", ["/tmp/tests"])
+
+
+# ── _json_safe edge cases ──────────────────────────────────────────── (cont)
+
+def test_json_safe_none():
+    from oxytest._compat import _json_safe
+    assert _json_safe(None) is None
+
+
+def test_json_safe_int():
+    from oxytest._compat import _json_safe
+    assert _json_safe(42) == 42
+
+
+def test_json_safe_str():
+    from oxytest._compat import _json_safe
+    assert _json_safe("hello") == "hello"
+
+
+def test_json_safe_nested():
+    from oxytest._compat import _json_safe
+    data = {"a": [1, b"bytes", {"nested": True}]}
+    result = _json_safe(data)
+    assert isinstance(result["a"][1], str)

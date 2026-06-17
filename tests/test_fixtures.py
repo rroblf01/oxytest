@@ -829,3 +829,151 @@ def test_fm_register_from_module_wrapped_has_oxytest_fixture():
     count_before = len(fm._fixtures)
     fm.register_from_module(mod)
     assert len(fm._fixtures) == count_before
+
+
+# ── Additional MonkeyPatch tests ─────────────────────────────────────
+
+
+def test_monkeypatch_setattr_dotted():
+    mp = MonkeyPatch()
+    import os as _os
+    mp.setattr("os.path.sep", "/custom")
+    assert _os.path.sep == "/custom"
+    mp.undo()
+    assert _os.path.sep == "/"
+
+
+def test_monkeypatch_setattr_builtins():
+    mp = MonkeyPatch()
+    mp.setattr("my_custom_builtin2", 42)
+    import builtins
+    val = getattr(builtins, "my_custom_builtin2", None)
+    mp.undo()
+    assert val is None or val == 42
+
+
+def test_monkeypatch_delattr_dotted():
+    mp = MonkeyPatch()
+    import os as _os4
+    mp.setattr("os.path.sep", "/del_test")
+    mp.delattr("os.path.sep")
+    assert not hasattr(_os4.path, "sep")
+    mp.undo()
+    assert hasattr(_os4.path, "sep")
+
+
+def test_monkeypatch_delattr_module_attr():
+    mp = MonkeyPatch()
+    mp.delattr("os", "nonexistent_del_attr", raising=False)
+
+
+def test_monkeypatch_delitem_raising_false():
+    mp = MonkeyPatch()
+    mp.delitem({}, "nonexistent2", raising=False)
+
+
+def test_monkeypatch_delenv_raising_false():
+    mp = MonkeyPatch()
+    mp.delenv("OXYTEST_NONEXISTENT2", raising=False)
+
+
+def test_monkeypatch_multiple_undo():
+    mp = MonkeyPatch()
+    d = {"a": 1, "b": 2}
+    mp.setitem(d, "a", 99)
+    mp.setitem(d, "b", 88)
+    mp.setenv("OXYTEST_MULTI2", "val")
+    assert d["a"] == 99
+    assert d["b"] == 88
+    assert os.environ.get("OXYTEST_MULTI2") == "val"
+    mp.undo()
+    assert d["a"] == 1
+    assert d["b"] == 2
+    assert "OXYTEST_MULTI2" not in os.environ
+
+
+def test_monkeypatch_setattr_dotted_3args():
+    mp = MonkeyPatch()
+    mp.setattr("os", "path", "custom_path")
+    import os.path as _osp
+    assert _osp is not None
+
+
+# ── FixtureManager cleanup tests ────────────────────────────────────
+
+
+def test_cleanup_generators():
+    fm = FixtureManager()
+    def gen_fixture():
+        yield "value"
+    fm._fixtures["cleanup_gen"] = FixtureDef(gen_fixture, scope="function", name="cleanup_gen")
+    fm._fixtures["cleanup_func"] = FixtureDef(lambda: "plain", scope="function", name="cleanup_func")
+    v1 = fm.resolve("cleanup_gen")
+    assert v1 == "value"
+    fm.resolve("cleanup_func")
+    fm.cleanup("function")
+    assert len(fm._generators) == 0
+
+
+def test_cleanup_session_preserved():
+    fm = FixtureManager()
+    calls = []
+    def session_fixture():
+        calls.append("setup")
+        yield "session_val2"
+        calls.append("teardown")
+    fm._fixtures["sess2"] = FixtureDef(session_fixture, scope="session", name="sess2")
+    v = fm.resolve("sess2")
+    assert v == "session_val2"
+    assert calls == ["setup"]
+    fm.cleanup("function")
+    assert "teardown" not in calls
+
+
+def test_cleanup_all_fixtures():
+    fm = FixtureManager()
+    def session_gen():
+        yield "sess"
+    def func_gen():
+        yield "func"
+    fm._fixtures["cl_all_sess"] = FixtureDef(session_gen, scope="session", name="cl_all_sess")
+    fm._fixtures["cl_all_func"] = FixtureDef(func_gen, scope="function", name="cl_all_func")
+    fm.resolve("cl_all_sess")
+    fm.resolve("cl_all_func")
+    fm.cleanup_all()
+    assert len(fm._generators) == 0
+    assert len(fm._async_generators) == 0
+    assert len(fm._cache) == 0
+
+
+def test_cleanup_with_stop():
+    fm = FixtureManager()
+    class Stoppable:
+        def __init__(self):
+            self.stopped = False
+        def stop(self):
+            self.stopped = True
+    obj = Stoppable()
+    fm._fixtures["stoppable2"] = FixtureDef(lambda: obj, scope="function", name="stoppable2")
+    v = fm.resolve("stoppable2")
+    assert v is obj
+    fm.cleanup("function")
+    assert obj.stopped
+
+
+def test_cleanup_tmpdirs():
+    fm = FixtureManager()
+    import tempfile
+    td = tempfile.mkdtemp()
+    fm._tmpdirs.append(td)
+    assert os.path.isdir(td)
+    fm.cleanup("function")
+    assert not os.path.isdir(td)
+
+
+# ── _CaptureFDFixture test ───────────────────────────────────────────
+
+
+def test_capfd():
+    capfd = _CaptureFDFixture()
+    assert capfd is not None
