@@ -267,7 +267,7 @@ class FixtureManager:
         if hasattr(value, "start") and callable(value.start):
             value.start()  # ty: ignore
 
-        if fdef.scope in ("session", "module", "class"):
+        if fdef.scope in ("session", "module", "class", "function"):
             if fdef.scope == "class" and self._current_class is not None:
                 _ckey = (name, self._current_class)
                 self._active_scopes[_ckey] = fdef.scope
