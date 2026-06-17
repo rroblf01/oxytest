@@ -281,9 +281,10 @@ class FixtureManager:
 
     def cleanup(self, scope: str = "function"):
         setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
-        # Only teardown generators that match the given scope
+        # Teardown generators in REVERSE order (last resolved = first torn down)
+        # This ensures fixture dependencies are torn down before their dependents
         _gen_names = list(self._generators.keys())
-        for name in _gen_names:
+        for name in reversed(_gen_names):
             _scope = self._active_scopes.get(name, "function")
             if scope != "session" and _scope in ("session", "module"):
                 continue
@@ -292,21 +293,31 @@ class FixtureManager:
                 next(gen)
             except StopIteration:
                 pass
-            gen.close()
+            except Exception:
+                pass  # Suppress errors from generator teardown (e.g., Flask context)
+            try:
+                gen.close()
+            except Exception:
+                pass
             if setup_show:
                 os.write(2, f"  TEARDOWN {name} (yield)\n".encode())
             del self._generators[name]
         _agen_names = list(self._async_generators.keys())
-        for name in _agen_names:
+        for name in reversed(_agen_names):
             _scope = self._active_scopes.get(name, "function")
             if scope != "session" and _scope in ("session", "module"):
                 continue
             agen = self._async_generators[name]
             try:
-                self._loop.run_until_complete(agen.__anext__())
-            except StopAsyncIteration:
+                try:
+                    self._loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    pass
+                except Exception:
+                    pass
+                self._loop.run_until_complete(agen.aclose())
+            except Exception:
                 pass
-            self._loop.run_until_complete(agen.aclose())
             if setup_show:
                 os.write(2, f"  TEARDOWN {name} (async yield)\n".encode())
             del self._async_generators[name]
@@ -780,6 +791,7 @@ class MonkeyPatch:
 
     def __init__(self):
         self._saved = []
+        self._setitem = []
 
     @classmethod
     @contextmanager
@@ -931,6 +943,14 @@ class MonkeyPatch:
                 else:
                     mapping[key] = old
         self._saved.clear()
+        # Process manually tracked _setitem entries (used by conftest.py)
+        for item in reversed(self._setitem):
+            mapping, key, value = item[:3]
+            if value is MonkeyPatch._UNSET:
+                mapping.pop(key, None)
+            else:
+                mapping[key] = value
+        self._setitem.clear()
 
 
 def _unwrap_param(p):
