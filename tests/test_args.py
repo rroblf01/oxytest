@@ -166,7 +166,7 @@ def test_parse_trace():
 
 def test_parse_override_ini():
     opts = _parse_args(["--override-ini", "filterwarnings=error"])
-    assert opts["override_ini"] == "filterwarnings=error"
+    assert "filterwarnings=error" in opts["override_ini"]
 
 
 def test_parse_confcutdir():
@@ -346,4 +346,4 @@ def test_parse_cov_append():
 
 def test_parse_override_ini_equals():
     opts = _parse_args(["--override-ini=filterwarnings=error"])
-    assert opts["override_ini"] == "filterwarnings=error"
+    assert "filterwarnings=error" in opts["override_ini"]

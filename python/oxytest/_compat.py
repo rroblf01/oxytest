@@ -248,8 +248,8 @@ def warns(expected_warning, *args, match=None):
 
 
 def deprecated_call(*args, **kwargs):
-    """Assert that code produces a DeprecationWarning or PendingDeprecationWarning."""
-    return warns((DeprecationWarning, PendingDeprecationWarning), *args, **kwargs)
+    """Assert that code produces a DeprecationWarning, PendingDeprecationWarning, or FutureWarning."""
+    return warns((DeprecationWarning, PendingDeprecationWarning, FutureWarning), *args, **kwargs)
 
 
 class _WarningsRecorder:
@@ -815,21 +815,39 @@ class Config:
     def getoption(self, name: str, default=None):
         return self._opts.get(name, default)
 
+    def get_verbosity(self, option: str = "verbose") -> int:
+        return self._opts.get("verbosity", 1 if self._opts.get("verbose") else 0)
+
+    @property
+    def inipath(self) -> Optional[pathlib.Path]:
+        inip = self._opts.get("inipath", None)
+        if inip:
+            return pathlib.Path(inip)
+        return None
+
+    @property
+    def invocation_params(self):
+        return None
+
     @property
     def option(self):
         return self._opts
 
-    def getini(self, name: str):
-        return self._inicfg.get(name, "")
 
-    @property
-    def stash(self):
-        return _ConfigStash(self._stash_data)
+class _InvocationParams:
+    def __init__(self, args=None):
+        self.args = args or []
 
-    def addinivalue_line(self, name: str, line: str):
-        if name not in self._inicfg:
-            self._inicfg[name] = []
-        self._inicfg[name].append(line)
+    def __repr__(self):
+        return f"_InvocationParams(args={self.args})"
+
+
+Config.getini = lambda self, name: self._inicfg.get(name, "")  # type: ignore
+Config.stash = property(lambda self: _ConfigStash(self._stash_data))  # type: ignore
+Config.addinivalue_line = lambda self, name, line: (  # type: ignore
+    self._inicfg.__setitem__(name, []) if name not in self._inicfg else None,
+    self._inicfg[name].append(line)
+)
 
 
 class _ConfigStash:
@@ -903,7 +921,7 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
     "showlocals": False,
     "strict_markers": False,
     "rootdir": None,
-    "override_ini": None,
+    "override_ini": [],
     "confcutdir": None,
     "basetemp": None,
     "runxfail": False,
@@ -1010,17 +1028,19 @@ def _parse_args(args: List[str]) -> dict[str, Any]:
         elif arg == "--trace":
             parsed["trace"] = True
             parsed["pdb"] = True
-        elif arg == "--override-ini" and i + 1 < len(args):
+        elif arg in ("-o", "--override-ini") and i + 1 < len(args):
             i += 1
-            parsed["override_ini"] = args[i]
+            parsed.setdefault("override_ini", []).append(args[i])
         elif arg.startswith("--override-ini="):
-            parsed["override_ini"] = arg.split("=", 1)[1]
+            parsed.setdefault("override_ini", []).append(arg.split("=", 1)[1])
         elif arg == "--deselect" and i + 1 < len(args):
             i += 1
             parsed.setdefault("deselect", []).append(args[i])
         elif arg == "--confcutdir" and i + 1 < len(args):
             i += 1
             parsed["confcutdir"] = args[i]
+        elif arg == "--noconftest":
+            parsed["noconftest"] = True
         elif arg == "--runxfail":
             parsed["runxfail"] = True
         elif arg == "--strict-config":
@@ -1269,6 +1289,7 @@ def _run_tests(
     import_mode: str = "append",
     capture: Optional[str] = None,
     deselect: Optional[list] = None,
+    noconftest: bool = False,
 ) -> int:
     pm = None
     if config is not None:
@@ -1314,10 +1335,10 @@ def _run_tests(
         if ignore:
             tests = [t for t in tests if not _is_ignored(t.path, ignore)]
         all_tests.extend(tests)
-        _load_conftest(path, config=config, confcutdir=confcutdir)
+        _load_conftest(path, config=config, confcutdir=confcutdir, noconftest=noconftest)
         for _test in tests:
             _tdir = os.path.dirname(os.path.abspath(_test.path))
-            _load_conftest(_tdir, config=config, confcutdir=confcutdir)
+            _load_conftest(_tdir, config=config, confcutdir=confcutdir, noconftest=noconftest)
 
     # Call pytest_itemcollected for each discovered test
     if pm:
@@ -1352,7 +1373,10 @@ def _run_tests(
         ]
 
     if strict_markers:
-        _validate_markers(all_tests)
+        _extra = getattr(config, '_inicfg', {}).get('markers', None)
+        if isinstance(_extra, str):
+            _extra = [_extra]
+        _validate_markers(all_tests, extra_markers=_extra)
 
     if fixtures_list:
         _list_fixtures()
@@ -1561,9 +1585,13 @@ def _write_lastfailed(results):
         json.dump(failed, f)
 
 
-def _validate_markers(tests):
-    """Check that all markers are registered (stub for now)."""
+def _validate_markers(tests, extra_markers: Optional[list] = None):
+    """Check that all markers are registered."""
     known = {"parametrize", "skip", "skipif", "xfail", "usefixtures", "filterwarnings", "anyio"}
+    if extra_markers:
+        for m in extra_markers:
+            name = m.split(":")[0].strip() if ":" in m else m.strip()
+            known.add(name)
     unknown = set()
     for t in tests:
         mod = _get_test_module(t.path)
@@ -1794,7 +1822,7 @@ def main(args: Optional[List[str]] = None) -> int:
         print("  --showlocals        Show local variables in tracebacks")
         print("  --strict-markers    Unknown markers cause errors")
         print("  --rootdir=PATH      Set root directory for discovery")
-        print("  --override-ini=KEY=VALUE  Override ini option")
+        print("  -o, --override-ini=KEY=VALUE  Override ini option")
         print("  --confcutdir=PATH   Stop searching for conftest.py at this dir")
         print("  --basetemp=PATH     Base temporary directory for tmp_path/tmpdir")
         print("  --fixtures          List available fixtures")
@@ -1827,10 +1855,12 @@ def main(args: Optional[List[str]] = None) -> int:
     pm.load_entry_point_plugins()
 
     config = Config(opts)
-    # Apply --override-ini if provided
-    override_ini = opts.get("override_ini")
+    # Apply --override-ini if provided (now accumulated as a list)
+    override_ini = opts.get("override_ini", [])
     if override_ini:
-        for pair in override_ini.split(","):
+        if isinstance(override_ini, str):
+            override_ini = [override_ini]
+        for pair in override_ini:
             if "=" in pair:
                 key, val = pair.split("=", 1)
                 config._inicfg[key.strip()] = val.strip()
@@ -1888,6 +1918,7 @@ def main(args: Optional[List[str]] = None) -> int:
         import_mode=opts.get("import_mode", "append"),
         capture=opts.get("capture", None),
         deselect=opts.get("deselect", None),
+        noconftest=opts.get("noconftest", False),
     )
 
     if cov_plugin:
@@ -1896,8 +1927,10 @@ def main(args: Optional[List[str]] = None) -> int:
     return exitcode
 
 
-def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir: Optional[str] = None):
+def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir: Optional[str] = None, noconftest: bool = False):
     """Load conftest.py files from the given directory and its parents."""
+    if noconftest:
+        return
     from oxytest._fixtures import get_fixture_manager
     from oxytest._plugin import get_plugin_manager
     fm = get_fixture_manager()
@@ -1941,9 +1974,14 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
                 # Support pytest_plugins variable in conftest
                 _pytest_plugins = getattr(mod, 'pytest_plugins', None)
                 if _pytest_plugins:
-                    for _plugin_name in (_pytest_plugins if isinstance(_pytest_plugins, (list, tuple)) else [_pytest_plugins]):
-                        if isinstance(_plugin_name, str):
-                            pm.load_plugin_by_name(_plugin_name)
+                    for _plugin_entry in (_pytest_plugins if isinstance(_pytest_plugins, (list, tuple)) else [_pytest_plugins]):
+                        if isinstance(_plugin_entry, str):
+                            pm.load_plugin_by_name(_plugin_entry)
+                        elif hasattr(_plugin_entry, '__module__'):
+                            # Accept module objects directly
+                            pm.register(_plugin_entry, name=getattr(_plugin_entry, '__name__', str(_plugin_entry)))
+                            from oxytest._fixtures import get_fixture_manager as _gfm
+                            _gfm().register_from_module(_plugin_entry)
         parent = os.path.dirname(dirpath)
         if parent == dirpath:
             break

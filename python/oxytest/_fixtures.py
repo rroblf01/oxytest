@@ -393,7 +393,17 @@ class FixtureManager:
         return {}
 
     def _fixture_tmp_path_factory(self):
-        return _TempPathFactory()
+        base = getattr(self, '_config', None)
+        base_dir = (getattr(base, 'basetemp', None) or getattr(base, '_basetemp', None)) if base else None
+        factory = _TempPathFactory(basetemp=base_dir)
+        yield factory
+        # Cleanup all created directories
+        import shutil
+        for d in factory._created:
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
 
     def _fixture_monkeypatch(self):
         mp = MonkeyPatch()
@@ -477,12 +487,14 @@ class _CacheFixture:
 
 
 class _TempPathFactory:
-    def __init__(self):
-        self._basetemp = None
+    def __init__(self, basetemp=None):
+        self._basetemp = basetemp
+        self._created = []
 
     def mktemp(self, basename: str) -> pathlib.Path:
         import tempfile as _tf
-        tmpdir = _tf.mkdtemp(prefix=f"{basename}_")
+        tmpdir = _tf.mkdtemp(prefix=f"{basename}_", dir=self._basetemp)
+        self._created.append(pathlib.Path(tmpdir))
         return pathlib.Path(tmpdir)
 
     def getbasetemp(self) -> pathlib.Path:

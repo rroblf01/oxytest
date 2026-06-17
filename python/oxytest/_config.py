@@ -128,6 +128,11 @@ def _parse_and_merge(args, opts):
         elif arg == "--durations" and i + 1 < len(args):
             i += 1
             result["durations"] = int(args[i])
+        elif arg in ("-o", "--override-ini") and i + 1 < len(args):
+            i += 1
+            result.setdefault("override_ini", []).append(args[i])
+        elif arg.startswith("--override-ini="):
+            result.setdefault("override_ini", []).append(arg.split("=", 1)[1])
         elif arg.startswith("-r") and len(arg) > 2:
             result["report_summary"] = arg[2:]
         elif arg == "--cov":
