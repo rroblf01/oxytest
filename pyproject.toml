@@ -1,6 +1,6 @@
 [project]
 name = "oxytest"
-version = "2.0.0"
+version = "3.0.0"
 description = "A 100% pytest-compatible test runner written in Python + Rust, optimized for speed"
 readme = "README.md"
 authors = [
