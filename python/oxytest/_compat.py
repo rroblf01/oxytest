@@ -1969,6 +1969,7 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
             module_name = os.path.relpath(conftest_path).replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
             import importlib.util
             with _import_lock:
+                spec = None
                 if module_name in sys.modules:
                     mod = sys.modules[module_name]
                 else:
@@ -2212,6 +2213,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
 
     # Resolve fixtures for remaining parameters (in order)
     _fixtures_resolved = []
+    _class_fixture_cache = {}
     try:
         for pname in fixture_params:
             try:
@@ -2229,24 +2231,40 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                     val = req
                 elif cls is not None and hasattr(cls, pname):
                     cls_method = getattr(cls, pname)
-                    if hasattr(cls_method, "_oxytest_fixture"):
+                    _is_pytest_fixture = hasattr(cls_method, "_fixture_function_marker") and hasattr(cls_method, "_fixture_function")
+                    if hasattr(cls_method, "_oxytest_fixture") or _is_pytest_fixture:
                         import inspect as _cls_inspect
+                        if _is_pytest_fixture:
+                            cls_method = getattr(cls_method, "_fixture_function")
                         _cls_sig = _cls_inspect.signature(cls_method)
                         _cls_args = []
                         for _cpname, _cparam in _cls_sig.parameters.items():
                             if _cpname == "self":
                                 _cls_args.append(instance)
+                            elif _cpname in _class_fixture_cache:
+                                _cls_args.append(_class_fixture_cache[_cpname])
                             elif _cpname in fm._fixtures:
                                 _cls_args.append(fm.resolve(_cpname))
-                            elif cls is not None and hasattr(cls, _cpname) and hasattr(getattr(cls, _cpname), "_oxytest_fixture"):
-                                _csub = getattr(cls, _cpname)
-                                _csub_sig = _cls_inspect.signature(_csub)
-                                _csub_args = []
-                                for _cspn, _csp in _csub_sig.parameters.items():
-                                    if _cspn == "self":
-                                        _csub_args.append(instance)
-                                _cls_args.append(_csub(*_csub_args))
+                            elif cls is not None and hasattr(cls, _cpname) and (hasattr(getattr(cls, _cpname), "_oxytest_fixture") or (hasattr(getattr(cls, _cpname), "_fixture_function_marker") and hasattr(getattr(cls, _cpname), "_fixture_function"))):
+                                if _cpname != pname:
+                                    _csub = getattr(cls, _cpname)
+                                    _csub_is_pytest = hasattr(_csub, "_fixture_function_marker") and hasattr(_csub, "_fixture_function")
+                                    if _csub_is_pytest:
+                                        _csub = getattr(_csub, "_fixture_function")
+                                    _csub_sig = _cls_inspect.signature(_csub)
+                                    _csub_args = []
+                                    for _cspn, _csp in _csub_sig.parameters.items():
+                                        if _cspn == "self":
+                                            _csub_args.append(instance)
+                                        elif _cspn in _class_fixture_cache:
+                                            _csub_args.append(_class_fixture_cache[_cspn])
+                                        elif _cspn in fm._fixtures:
+                                            _csub_args.append(fm.resolve(_cspn))
+                                    _csub_val = _csub(*_csub_args)
+                                    _class_fixture_cache[_cpname] = _csub_val
+                                    _cls_args.append(_csub_val)
                         val = cls_method(*_cls_args)
+                        _class_fixture_cache[pname] = val
                     else:
                         val = fm.resolve(pname)
                 else:
@@ -2897,7 +2915,7 @@ def _expand_parametrize(tests: list) -> list:
             _id_parts = []
             for (_fname, _), _pval in zip(_fixture_items, _combo):
                 # Unwrap pytest.param() or dict-like to get the actual value
-                if hasattr(_pval, 'values'):
+                if not isinstance(_pval, dict) and hasattr(_pval, 'values'):
                     _pval = _pval.values[0] if _pval.values and len(_pval.values) == 1 else list(_pval.values) if _pval.values else None
                 elif isinstance(_pval, dict) and "values" in _pval:
                     _actual = _pval["values"]
