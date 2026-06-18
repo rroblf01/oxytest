@@ -29,7 +29,6 @@ class _AssertRewriter(ast.NodeTransformer):
         self._collect_details(node.test, details)
         source = f"assert {ast.unparse(node.test)}"
         if node.msg is not None:
-            expression = ast.unparse(node.test)
             msg_parts = [node.msg, ast.Constant(value="\nassert ")]
             for part in self._get_expression_parts(node.test):
                 if isinstance(part, ast.expr):

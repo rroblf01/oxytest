@@ -17,7 +17,7 @@ def _worker_thread(batch: List[Any], results: List[Any], results_lock: threading
     GIL switches between tests for I/O-bound parallelism.
     Note: capsys/capfd are no-ops in threads (sys.stdout is shared globally)."""
     from oxytest._compat import _execute_test, _load_conftest
-    from oxytest._core import test_result_passed, test_result_failed  # type: ignore
+    from oxytest._core import test_result_passed, test_result_failed
 
     # Load conftest.py for each unique test directory (thread-local FixtureManager)
     conftest_dirs = set()

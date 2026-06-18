@@ -463,11 +463,7 @@ class FixtureManager:
         return _WarningsRecorder()
 
     def _fixture_doctest_namespace(self):
-        try:
-            from oxytest._doctest import _DOCTEST_PREFIX
-            return {}
-        except ImportError:
-            return {}
+        return {}
 
     def _fixture_tmp_path_factory(self):
         base = getattr(self, '_config', None)
@@ -568,7 +564,7 @@ class _CacheFixture:
     def get(self, key, default=None):
         if key in self._store:
             return self._store[key]
-        import json, os
+        import json
         path = self._key_path(key)
         try:
             with open(path) as f:
@@ -579,7 +575,8 @@ class _CacheFixture:
             return default
 
     def set(self, key, value):
-        import json, os
+        import json
+        import os
         self._store[key] = value
         path = self._key_path(key)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1017,7 +1014,7 @@ class MonkeyPatch:
         self._saved.clear()
         # Process manually tracked _setitem entries (used by conftest.py)
         try:
-            from _pytest.monkeypatch import notset as _pytest_notset
+            from _pytest.monkeypatch import notset as _pytest_notset  # ty: ignore
         except Exception:
             _pytest_notset = MonkeyPatch._UNSET
         for item in reversed(self._setitem):

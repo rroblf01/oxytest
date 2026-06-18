@@ -475,6 +475,7 @@ class FixtureRequest:
         self._class_name = None
         self._instance = None
         self._fixture_defs = None
+        self._fixture_name = None
 
     def addfinalizer(self, finalizer):
         self._finalizers.append(finalizer)
@@ -575,7 +576,7 @@ class _RequestKeywords:
 class _RequestSession:
     @property
     def config(self):
-        from oxytest._compat import get_fixture_manager as _gfm
+        from oxytest._fixtures import get_fixture_manager as _gfm
         _fm = _gfm()
         return getattr(_fm, '_config', None)
 
@@ -909,6 +910,20 @@ class Config:
 
     def getoption(self, name: str, default=None):
         return self._opts.get(name, default)
+
+    def getini(self, name: str):
+        return self._inicfg.get(name, "")
+
+    def addinivalue_line(self, name: str, line: str):
+        existing = self._inicfg.get(name, "")
+        if existing:
+            existing += "\n" + line
+        else:
+            self._inicfg[name] = line
+
+    @property
+    def stash(self):
+        return self._stash_data
 
     def get_verbosity(self, option: str = "verbose") -> int:
         return self._opts.get("verbosity", 1 if self._opts.get("verbose") else 0)

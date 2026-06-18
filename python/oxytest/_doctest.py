@@ -2,7 +2,6 @@ import ast
 import doctest
 import os
 import sys
-import traceback
 
 
 _DOCTEST_PREFIX = "doctest."

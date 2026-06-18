@@ -31,13 +31,19 @@ def load_config(path=None):
             if "testpaths" in tool_pytest:
                 result.setdefault("testpaths", tool_pytest["testpaths"])
             if "markers" in tool_pytest:
-                markers = result.setdefault("_extra_markers", [])
-                markers.extend(tool_pytest["markers"] if isinstance(tool_pytest["markers"], list) else [tool_pytest["markers"]])
+                _extra = result.get("_extra_markers")
+                if _extra is None:
+                    _extra = []
+                    result["_extra_markers"] = _extra
+                _extra.extend(tool_pytest["markers"] if isinstance(tool_pytest["markers"], list) else [tool_pytest["markers"]])
             if "filterwarnings" in tool_pytest:
                 result.setdefault("filterwarnings", tool_pytest["filterwarnings"] if isinstance(tool_pytest["filterwarnings"], list) else [tool_pytest["filterwarnings"]])
             if "norecursedirs" in tool_pytest:
-                result.setdefault("ignore", [])
-                result["ignore"].extend(tool_pytest["norecursedirs"])
+                _ign = result.get("ignore")
+                if _ign is None:
+                    _ign = []
+                    result["ignore"] = _ign
+                _ign.extend(tool_pytest["norecursedirs"])
             if "addopts" in tool_pytest:
                 result.setdefault("addopts", tool_pytest["addopts"])
     # Merge pytest.ini / setup.cfg / tox.ini only when auto-detecting config
