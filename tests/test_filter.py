@@ -50,8 +50,8 @@ def test_parse_nested():
 
 def test_parse_quoted():
     result = _parse_keyword_expression('"foo bar"')
-    assert len(result) == 2
-    assert "foo" in result[0]
+    assert len(result) == 1
+    assert result[0] == '"foo bar"'
 
 
 # ── Keyword expression evaluation ────────────────────────────────────

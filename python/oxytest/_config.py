@@ -25,6 +25,21 @@ def load_config(path=None):
             tool_oxytest = data.get("tool", {}).get("oxytest", {})
             if tool_oxytest:
                 result.update(tool_oxytest)
+        # Read [tool.pytest.ini_options] from pyproject.toml (pytest's recommended config location)
+        tool_pytest = data.get("tool", {}).get("pytest", {}).get("ini_options", {})
+        if tool_pytest:
+            if "testpaths" in tool_pytest:
+                result.setdefault("testpaths", tool_pytest["testpaths"])
+            if "markers" in tool_pytest:
+                markers = result.setdefault("_extra_markers", [])
+                markers.extend(tool_pytest["markers"] if isinstance(tool_pytest["markers"], list) else [tool_pytest["markers"]])
+            if "filterwarnings" in tool_pytest:
+                result.setdefault("filterwarnings", tool_pytest["filterwarnings"] if isinstance(tool_pytest["filterwarnings"], list) else [tool_pytest["filterwarnings"]])
+            if "norecursedirs" in tool_pytest:
+                result.setdefault("ignore", [])
+                result["ignore"].extend(tool_pytest["norecursedirs"])
+            if "addopts" in tool_pytest:
+                result.setdefault("addopts", tool_pytest["addopts"])
     # Merge pytest.ini / setup.cfg / tox.ini only when auto-detecting config
     if not only_path:
         ini_config = _read_ini_config()

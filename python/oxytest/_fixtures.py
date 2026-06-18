@@ -21,6 +21,7 @@ class FixtureDef:
         params: Optional[list] = None,
         autouse: bool = False,
         name: Optional[str] = None,
+        raw_params: Optional[list] = None,
     ):
         self.func = func
         self.scope = scope
@@ -28,6 +29,7 @@ class FixtureDef:
         self.autouse = autouse
         self.name = name or getattr(func, "__name__", str(func))
         self.cached_value = None
+        self._raw_params = raw_params
         self.cached_scope = None
 
 
@@ -46,6 +48,7 @@ class FixtureManager:
         self._current_request_param = None
         self._current_class = None
         self._current_instance = None
+        self._current_module = None
         self._current_request = None
         self._setup_builtins()
         self._registered_files: set = set()
@@ -98,12 +101,28 @@ class FixtureManager:
             return
         if meta_value is not None:
             meta: dict[str, Any] = cast("dict[str, Any]", meta_value)
-            self._fixtures[meta["name"]] = FixtureDef(
+            name = meta["name"]
+            # If re-registering an existing fixture, invalidate stale cache/generators
+            if name in self._fixtures:
+                self._cache.pop(name, None)
+                self._active_scopes.pop(name, None)
+                gen = self._generators.pop(name, None)
+                if gen:
+                    try:
+                        next(gen)
+                    except StopIteration:
+                        pass
+                    try:
+                        gen.close()
+                    except Exception:
+                        pass
+            self._fixtures[name] = FixtureDef(
                 func,
                 scope=meta["scope"],
                 params=meta["params"],
                 autouse=meta["autouse"],
-                name=meta["name"],
+                name=name,
+                raw_params=meta.get("_raw_params"),
             )
             self._autouse_list = None
 
@@ -173,6 +192,7 @@ class FixtureManager:
                     wrapped._oxytest_fixture = {
                         "scope": scope,
                         "params": params,
+                        "_raw_params": raw_params,
                         "autouse": autouse,
                         "name": fixture_name,
                     }
@@ -207,12 +227,16 @@ class FixtureManager:
             _cache_key = (name, self._current_class)
         if _cache_key in self._cache:
             cached_scope = self._active_scopes.get(_cache_key)
-            if cached_scope == "session" or cached_scope == scope:
+            if cached_scope == "session" or cached_scope == "module" or cached_scope == scope:
                 return self._cache[_cache_key]
-
+        # If a generator for this fixture is still alive (module/class scope),
+        # the fixture is already resolved — re-resolve would create duplicates.
+        # Check cache first, then resume from generator if needed.
+        if name in self._generators and name in self._cache:
+            return self._cache[name]
         if name not in self._fixtures:
             raise LookupError(f"Fixture {name!r} not found")
-
+        
         fdef = self._fixtures[name]
 
         # Resolve fixture function arguments recursively
@@ -230,6 +254,11 @@ class FixtureManager:
                     req.param = self._current_request_param.get(name)
                 else:
                     req.param = self._current_request_param
+                req._module = self._current_module
+                req._class_name = self._current_class
+                req._instance = self._current_instance
+                req._fixture_defs = self._fixtures
+                req._fixture_name = name
                 fixture_args.append(req)
             elif pname in self._fixtures:
                 sub_value = self.resolve(pname, scope=scope, _resolving=_resolving)
@@ -330,11 +359,12 @@ class FixtureManager:
                 if setup_show and hasattr(value, "__class__"):
                     os.write(2, f"  TEARDOWN {value.__class__.__name__} (stop)\n".encode())
         self._resolved_fixtures.clear()
-        # Clear cache entries NOT matching the requested scope
+        # Clear cache entries NOT matching the requested scope.
+        # Preserve session-scoped and module-scoped entries so they persist across tests.
         _keys_to_keep = {}
         for name, value in self._cache.items():
             _scope = self._active_scopes.get(name, "function")
-            if scope != "session" and _scope == "session":
+            if scope != "session" and _scope in ("session", "module"):
                 _keys_to_keep[name] = value
             elif hasattr(value, "stop"):
                 try:
@@ -342,6 +372,9 @@ class FixtureManager:
                 except Exception:
                     pass
         self._cache = _keys_to_keep
+        self._active_scopes = {
+            k: v for k, v in self._active_scopes.items() if k in _keys_to_keep
+        }
         self._active_scopes = {
             k: v for k, v in self._active_scopes.items() if k in _keys_to_keep
         }
@@ -430,7 +463,11 @@ class FixtureManager:
         return _WarningsRecorder()
 
     def _fixture_doctest_namespace(self):
-        return {}
+        try:
+            from oxytest._doctest import _DOCTEST_PREFIX
+            return {}
+        except ImportError:
+            return {}
 
     def _fixture_tmp_path_factory(self):
         base = getattr(self, '_config', None)
@@ -518,10 +555,43 @@ class _RecordTestsuitePropertyFixture:
 class _CacheFixture:
     def __init__(self):
         self._store = {}
+
+    @staticmethod
+    def _cache_dir():
+        import os
+        cwd = os.getcwd()
+        return os.path.join(cwd, ".pytest_cache", "v", "cache")
+
+    def _key_path(self, key):
+        return os.path.join(self._cache_dir(), key.replace("/", os.sep) + ".json")
+
     def get(self, key, default=None):
-        return self._store.get(key, default)
+        if key in self._store:
+            return self._store[key]
+        import json, os
+        path = self._key_path(key)
+        try:
+            with open(path) as f:
+                val = json.load(f)
+            self._store[key] = val
+            return val
+        except (FileNotFoundError, ValueError):
+            return default
+
     def set(self, key, value):
+        import json, os
         self._store[key] = value
+        path = self._key_path(key)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(value, f)
+
+    def makedir(self, key):
+        import os
+        path = self._key_path(key).rstrip(".json")
+        os.makedirs(path, exist_ok=True)
+        return path
+
     def clear(self):
         self._store.clear()
 
@@ -909,9 +979,11 @@ class MonkeyPatch:
         os.chdir(path)
 
     def syspath_prepend(self, path):
+        import os as _os
         import sys as _sys
-        self._saved.append(("syspath", path))
-        _sys.path.insert(0, path)
+        str_path = _os.fspath(path)
+        self._saved.append(("syspath", str_path))
+        _sys.path.insert(0, str_path)
 
     def undo(self):
         import sys as _sys
@@ -944,9 +1016,13 @@ class MonkeyPatch:
                     mapping[key] = old
         self._saved.clear()
         # Process manually tracked _setitem entries (used by conftest.py)
+        try:
+            from _pytest.monkeypatch import notset as _pytest_notset
+        except Exception:
+            _pytest_notset = MonkeyPatch._UNSET
         for item in reversed(self._setitem):
             mapping, key, value = item[:3]
-            if value is MonkeyPatch._UNSET:
+            if value is MonkeyPatch._UNSET or value is _pytest_notset:
                 mapping.pop(key, None)
             else:
                 mapping[key] = value

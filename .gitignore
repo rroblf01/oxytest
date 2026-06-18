@@ -32,3 +32,6 @@ benchmark_tests/
 .coverage.*
 htmlcov/
 coverage/
+
+# Bak
+*.bak
