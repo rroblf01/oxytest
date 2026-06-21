@@ -136,12 +136,22 @@ pub fn run_tests(py: Python<'_>, tests: Vec<TestItem>, num_workers: Option<usize
                 for test in file_tests {
                     file_results.push(run_single_test(py, test, nocapture));
                 }
-                results.lock().unwrap().extend(file_results);
+                match results.lock() {
+                    Ok(mut guard) => guard.extend(file_results),
+                    Err(poisoned) => {
+                        let guard = poisoned.into_inner();
+                        // Mutex was poisoned (e.g. a prior panic); recover and continue
+                        drop(guard);
+                    }
+                }
             });
         });
     });
 
-    let mut final_results = results.into_inner().unwrap();
+    let mut final_results = match results.into_inner() {
+        Ok(r) => r,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     sort_results(&mut final_results);
     Ok(final_results)
 }

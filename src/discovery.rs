@@ -99,7 +99,7 @@ pub fn discover_tests(py: Python<'_>, root_dir: &str, pattern: Option<&str>) -> 
     let pattern = pattern.map(|p| p.to_lowercase());
 
     let test_files: Vec<String> = walkdir::WalkDir::new(root)
-        .follow_links(true)
+        .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
             if e.depth() == 0 {
