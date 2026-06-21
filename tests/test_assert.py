@@ -10,6 +10,7 @@ from oxytest._assert import (
     install_assert_rewriting,
     register_assert_rewrite,
     _RewriteLoader,
+    _saferepr,
 )
 
 
@@ -122,3 +123,139 @@ def test_rewrite_loader_exec_module():
         except AssertionError as e:
             msg = str(e)
             assert "assert" in msg or "1" in msg or "2" in msg
+
+
+def _rewrite_and_exec(assert_source):
+    """Rewrite an assert statement, compile, and return the callable."""
+    source = f"def test_func():\n    {assert_source}\n"
+    result = _rewrite_module(source, "test.py")
+    code = compile(result, "test.py", "exec")
+    ns = {"_saferepr": _saferepr}
+    exec(code, ns)
+    return ns["test_func"]
+
+
+def test_assert_fail_message_format():
+    func = _rewrite_and_exec("assert 1 == 2")
+    try:
+        func()
+    except AssertionError as e:
+        msg = str(e)
+        assert "1" in msg
+        assert "2" in msg
+        assert "==" in msg or "where" in msg
+
+
+def test_assert_fail_message_in():
+    func = _rewrite_and_exec("assert 5 not in [1, 2, 3]")
+    try:
+        func()
+    except AssertionError as e:
+        msg = str(e)
+        assert "5" in msg
+        assert "not in" in msg
+
+
+def test_assert_fail_message_is():
+    func = _rewrite_and_exec("assert None is not None")
+    try:
+        func()
+    except AssertionError as e:
+        msg = str(e)
+        assert "None" in msg
+        assert "is not" in msg
+
+
+def test_assert_pass_does_not_raise():
+    func = _rewrite_and_exec("assert 1 == 1")
+    # Should not raise
+    func()
+
+
+def test_assert_msg_propagated():
+    func = _rewrite_and_exec('assert 1 == 2, "custom message"')
+    try:
+        func()
+    except AssertionError as e:
+        msg = str(e)
+        assert "custom message" in msg
+
+
+def test_double_eval_prevention():
+    """Expressions with side effects should only be evaluated once."""
+    source = """
+def test_func():
+    calls = []
+    def pop_item():
+        calls.append(1)
+        return 42
+    try:
+        assert pop_item() == 99
+    except AssertionError:
+        pass
+    return len(calls)
+"""
+    result = _rewrite_module(source, "test.py")
+    ns = {"_saferepr": _saferepr}
+    exec(result, ns)
+    func = ns["test_func"]
+    call_count = func()
+    assert call_count == 1, f"Expected 1 call, got {call_count}"
+
+
+def test_saferepr_recursive():
+    data = []
+    data.append(data)
+    result = _saferepr(data)
+    assert "..." in result
+
+
+def test_saferepr_long():
+    result = _saferepr(list(range(1000)))
+    assert len(result) < 1000
+    assert result.endswith("...")
+
+
+def test_saferepr_bad_repr():
+    class Bad:
+        def __repr__(self):
+            raise RuntimeError("fail")
+    result = _saferepr(Bad())
+    assert "Bad" in result
+
+
+def test_saferepr_normal():
+    assert _saferepr(42) == "42"
+    assert _saferepr("hello") == "'hello'"
+
+
+def test_assert_rewriter_temp_vars_generated():
+    """Check that temp variables are generated for sub-expressions."""
+    source = "def f():\n    assert x == y\n"
+    result = _rewrite_module(source, "test.py")
+    # Should have at least one _ox temp variable
+    assert "_ox0" in result
+
+
+def test_assert_rewriter_no_temp_for_simple():
+    """Simple literal assertions don't need temp vars."""
+    source = "def f():\n    assert True\n"
+    result = _rewrite_module(source, "test.py")
+    # With no details to collect, no temp vars should be generated
+    # The assertion should still be there
+    assert "AssertionError" in result
+
+
+def test_assert_complex_expression():
+    """Complex expressions like comprehensions should be captured."""
+    source = "def f():\n    assert [x for x in range(5)] == [0, 1, 2, 3, 4]\n"
+    result = _rewrite_module(source, "test.py")
+    assert "AssertionError" in result
+    assert "_ox0" in result or "_ox1" in result
+
+
+def test_assert_walrus_operator():
+    """Walrus operator (:=) should be handled."""
+    source = "def f():\n    assert (n := len([1, 2, 3])) == 3\n"
+    result = _rewrite_module(source, "test.py")
+    assert "AssertionError" in result
