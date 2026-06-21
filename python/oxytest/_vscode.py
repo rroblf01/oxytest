@@ -155,7 +155,7 @@ def hook_oxytest_execution(results, pipe_path, cwd, status="success", error=None
         traceback = None
         if not r.passed:
             err = r.error or ""
-            if "SKIPPED:" in err:
+            if "SKIPPED:" in err.upper():
                 outcome = "skipped"
             elif "XFAIL:" in err:
                 outcome = "success"
@@ -214,12 +214,21 @@ def pytest_sessionfinish(session, exitstatus):
         return
     cwd = os.getcwd()
     if _IS_DISCOVERY:
-        items = getattr(session, "_collected_items", [])
+        items = getattr(session, "_collected_items", None) or []
         from oxytest._compat import _expand_parametrize
         expanded = _expand_parametrize(items)
         hook_oxytest_discovery(expanded, pipe, cwd)
     else:
-        results = getattr(session, "_test_results", [])
+        results = getattr(session, "_test_results", None) or []
         hook_oxytest_execution(results, pipe, cwd,
                                 status="success" if exitstatus == 0 else "failure",
                                 error=None if exitstatus == 0 else ["Some tests failed"])
+
+
+__all__ = [
+    "hook_oxytest_discovery",
+    "hook_oxytest_execution",
+    "pytest_addoption",
+    "pytest_configure",
+    "pytest_sessionfinish",
+]

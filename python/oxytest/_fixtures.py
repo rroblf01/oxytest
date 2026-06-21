@@ -9,8 +9,21 @@ import asyncio
 import logging
 import importlib
 import threading
+import traceback
 from typing import Any, Callable, Dict, Generator, Optional, cast, Union
 from contextlib import contextmanager
+
+
+_LOG_PREFIX = "oxytest: warning"
+
+
+def _log_exc(msg: str = "") -> None:
+    tb = traceback.format_exc()
+    if tb and tb != "NoneType: None\n":
+        last_line = tb.strip().split("\n")[-1]
+        print(f"{_LOG_PREFIX}: {msg} {last_line}", file=sys.stderr)
+    elif msg:
+        print(f"{_LOG_PREFIX}: {msg}", file=sys.stderr)
 
 
 class FixtureDef:
@@ -35,6 +48,7 @@ class FixtureDef:
 
 class FixtureManager:
     def __init__(self):
+        self._lock = threading.RLock()
         self._fixtures: Dict[str, FixtureDef] = {}
         self._cache: Dict[Union[str, tuple], Any] = {}
         self._active_scopes: Dict[Union[str, tuple], str] = {}
@@ -79,8 +93,9 @@ class FixtureManager:
 
     def _setup_third_party_fixtures(self):
         """Register fixtures commonly provided by third-party pytest plugins."""
-        self._fixtures["eval_example"] = FixtureDef(self._fixture_eval_example, scope="function", name="eval_example")
-        self._fixtures["benchmark"] = FixtureDef(self._fixture_benchmark, scope="function", name="benchmark")
+        with self._lock:
+            self._fixtures["eval_example"] = FixtureDef(self._fixture_eval_example, scope="function", name="eval_example")
+            self._fixtures["benchmark"] = FixtureDef(self._fixture_benchmark, scope="function", name="benchmark")
 
     def _fixture_eval_example(self):
         """Lazy import of pytest_examples fixture."""
@@ -95,46 +110,50 @@ class FixtureManager:
         self._autouse_list = None
 
     def register(self, func: Callable):
-        try:
-            meta_value = getattr(func, "_oxytest_fixture", None)
-        except Exception:
-            return
-        if meta_value is not None:
-            meta: dict[str, Any] = cast("dict[str, Any]", meta_value)
-            name = meta["name"]
-            # If re-registering an existing fixture, invalidate stale cache/generators
-            if name in self._fixtures:
-                self._cache.pop(name, None)
-                self._active_scopes.pop(name, None)
-                gen = self._generators.pop(name, None)
-                if gen:
-                    try:
-                        next(gen)
-                    except StopIteration:
-                        pass
-                    try:
-                        gen.close()
-                    except Exception:
-                        pass
-            self._fixtures[name] = FixtureDef(
-                func,
-                scope=meta["scope"],
-                params=meta["params"],
-                autouse=meta["autouse"],
-                name=name,
-                raw_params=meta.get("_raw_params"),
-            )
-            self._autouse_list = None
+        with self._lock:
+            try:
+                meta_value = getattr(func, "_oxytest_fixture", None)
+            except Exception:
+                _log_exc(f"Failed to register fixture {getattr(func, '__name__', '?')}")
+                return
+            if meta_value is not None:
+                meta: dict[str, Any] = cast("dict[str, Any]", meta_value)
+                name = meta["name"]
+                # If re-registering an existing fixture, invalidate stale cache/generators
+                if name in self._fixtures:
+                    self._cache.pop(name, None)
+                    self._active_scopes.pop(name, None)
+                    gen = self._generators.pop(name, None)
+                    if gen:
+                        try:
+                            next(gen)
+                        except StopIteration:
+                            pass
+                        try:
+                            gen.close()
+                        except Exception:
+                            _log_exc(f"Failed to close generator for {name}")
+                self._fixtures[name] = FixtureDef(
+                    func,
+                    scope=meta["scope"],
+                    params=meta["params"],
+                    autouse=meta["autouse"],
+                    name=name,
+                    raw_params=meta.get("_raw_params"),
+                )
+                self._autouse_list = None
 
     def register_from_module(self, module):
-        mod_id = id(module)
-        if mod_id in self._registered_files:
-            return
-        self._registered_files.add(mod_id)
+        with self._lock:
+            mod_id = id(module)
+            if mod_id in self._registered_files:
+                return
+            self._registered_files.add(mod_id)
         for attr_name in dir(module):
             try:
                 obj = getattr(module, attr_name)
             except Exception:
+                _log_exc(f"Failed to get attribute {attr_name} from {getattr(module, '__name__', '?')}")
                 continue
             try:
                 # Use getattr with sentinel instead of hasattr (hasattr doesn't catch RuntimeError from descriptors)
@@ -144,6 +163,7 @@ class FixtureManager:
                     try:
                         fixture_func = getattr(obj, "_fixture_function", None)
                     except Exception:
+                        _log_exc(f"Failed to get _fixture_function from {attr_name}")
                         fixture_func = None
                     if fixture_func is not None:
                         wrapped = fixture_func
@@ -151,10 +171,12 @@ class FixtureManager:
                         try:
                             wrapped = getattr(obj, "__wrapped__")
                         except Exception:
+                            _log_exc(f"Failed to get __wrapped__ from {attr_name}")
                             continue
                     try:
                         func_attr = getattr(wrapped, "__func__", None)
                     except Exception:
+                        _log_exc(f"Failed to get __func__ from {attr_name}")
                         func_attr = None
                     if func_attr is not None:
                         wrapped = func_attr
@@ -163,6 +185,7 @@ class FixtureManager:
                     try:
                         oxy_fix = getattr(wrapped, "_oxytest_fixture", None)
                     except Exception:
+                        _log_exc(f"Failed to get _oxytest_fixture from {attr_name}")
                         oxy_fix = None
                     if oxy_fix is not None:
                         continue
@@ -176,6 +199,7 @@ class FixtureManager:
                     try:
                         marker = getattr(obj, "_fixture_function_marker", None)
                     except Exception:
+                        _log_exc(f"Failed to get _fixture_function_marker for {attr_name}")
                         marker = None
                     if marker is not None:
                         scope = getattr(marker, "scope", "function") or "function"
@@ -198,11 +222,13 @@ class FixtureManager:
                     }
                     self.register(wrapped)
             except Exception:
+                _log_exc(f"Failed to register fixture from {attr_name} in {getattr(module, '__name__', '?')}")
                 continue
 
     def clear_registered(self):
         """Clear the set of known module ids (for cross-run hygiene)."""
-        self._registered_files.clear()
+        with self._lock:
+            self._registered_files.clear()
 
     def resolve(self, name: str, scope: str = "function", _resolving: Optional[set] = None) -> Any:
         if _resolving is None:
@@ -217,8 +243,6 @@ class FixtureManager:
 
     def _resolve_impl(self, name: str, scope: str = "function", _resolving: Optional[set] = None) -> Any:
         setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
-        if setup_show:
-            os.write(2, f"SETUP    {name}\n".encode())
         if setup_show:
             os.write(2, f"SETUP    {name}\n".encode())
         # For class-scoped fixtures, use a composite cache key
@@ -309,112 +333,107 @@ class FixtureManager:
         return value
 
     def cleanup(self, scope: str = "function"):
-        setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
-        # Teardown generators in REVERSE order (last resolved = first torn down)
-        # This ensures fixture dependencies are torn down before their dependents
-        _gen_names = list(self._generators.keys())
-        for name in reversed(_gen_names):
-            _scope = self._active_scopes.get(name, "function")
-            if scope != "session" and _scope in ("session", "module"):
-                continue
-            gen = self._generators[name]
-            try:
-                next(gen)
-            except StopIteration:
-                pass
-            except Exception:
-                pass  # Suppress errors from generator teardown (e.g., Flask context)
-            try:
-                gen.close()
-            except Exception:
-                pass
-            if setup_show:
-                os.write(2, f"  TEARDOWN {name} (yield)\n".encode())
-            del self._generators[name]
-        _agen_names = list(self._async_generators.keys())
-        for name in reversed(_agen_names):
-            _scope = self._active_scopes.get(name, "function")
-            if scope != "session" and _scope in ("session", "module"):
-                continue
-            agen = self._async_generators[name]
-            try:
+        with self._lock:
+            setup_show = os.environ.get("OXYTEST_SETUP_SHOW") == "1"
+            _gen_names = list(self._generators.keys())
+            for name in reversed(_gen_names):
+                _scope = self._active_scopes.get(name, "function")
+                if scope != "session" and _scope in ("session", "module"):
+                    continue
+                gen = self._generators[name]
                 try:
-                    self._loop.run_until_complete(agen.__anext__())
-                except StopAsyncIteration:
+                    next(gen)
+                except StopIteration:
                     pass
                 except Exception:
-                    pass
-                self._loop.run_until_complete(agen.aclose())
-            except Exception:
-                pass
-            if setup_show:
-                os.write(2, f"  TEARDOWN {name} (async yield)\n".encode())
-            del self._async_generators[name]
-        for value in self._resolved_fixtures:
-            if hasattr(value, "stop"):
+                    _log_exc(f"Generator teardown error for {name}")
                 try:
-                    value.stop()
+                    gen.close()
                 except Exception:
-                    pass
-                if setup_show and hasattr(value, "__class__"):
-                    os.write(2, f"  TEARDOWN {value.__class__.__name__} (stop)\n".encode())
-        self._resolved_fixtures.clear()
-        # Clear cache entries NOT matching the requested scope.
-        # Preserve session-scoped and module-scoped entries so they persist across tests.
-        _keys_to_keep = {}
-        for name, value in self._cache.items():
-            _scope = self._active_scopes.get(name, "function")
-            if scope != "session" and _scope in ("session", "module"):
-                _keys_to_keep[name] = value
-            elif hasattr(value, "stop"):
+                    _log_exc(f"Generator close error for {name}")
+                if setup_show:
+                    os.write(2, f"  TEARDOWN {name} (yield)\n".encode())
+                del self._generators[name]
+            _agen_names = list(self._async_generators.keys())
+            for name in reversed(_agen_names):
+                _scope = self._active_scopes.get(name, "function")
+                if scope != "session" and _scope in ("session", "module"):
+                    continue
+                agen = self._async_generators[name]
                 try:
-                    value.stop()
+                    try:
+                        self._loop.run_until_complete(agen.__anext__())
+                    except StopAsyncIteration:
+                        pass
+                    except Exception:
+                        _log_exc(f"Async generator teardown error for {name}")
+                    self._loop.run_until_complete(agen.aclose())
                 except Exception:
-                    pass
-        self._cache = _keys_to_keep
-        self._active_scopes = {
-            k: v for k, v in self._active_scopes.items() if k in _keys_to_keep
-        }
-        self._active_scopes = {
-            k: v for k, v in self._active_scopes.items() if k in _keys_to_keep
-        }
-        for tmpdir in self._tmpdirs:
-            try:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            except Exception:
-                pass
-        self._tmpdirs.clear()
+                    _log_exc(f"Async generator close error for {name}")
+                if setup_show:
+                    os.write(2, f"  TEARDOWN {name} (async yield)\n".encode())
+                del self._async_generators[name]
+            for value in self._resolved_fixtures:
+                if hasattr(value, "stop"):
+                    try:
+                        value.stop()
+                    except Exception:
+                        _log_exc(f"Failed to stop {getattr(value, '__class__', value)!r}")
+                    if setup_show and hasattr(value, "__class__"):
+                        os.write(2, f"  TEARDOWN {value.__class__.__name__} (stop)\n".encode())
+            self._resolved_fixtures.clear()
+            _keys_to_keep = {}
+            for name, value in self._cache.items():
+                _scope = self._active_scopes.get(name, "function")
+                if scope != "session" and _scope in ("session", "module"):
+                    _keys_to_keep[name] = value
+                elif hasattr(value, "stop"):
+                    try:
+                        value.stop()
+                    except Exception:
+                        _log_exc(f"Failed to stop cached fixture {name}")
+            self._cache = _keys_to_keep
+            self._active_scopes = {
+                k: v for k, v in self._active_scopes.items() if k in _keys_to_keep
+            }
+            for tmpdir in self._tmpdirs:
+                try:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                except Exception:
+                    _log_exc(f"Failed to remove tmpdir {tmpdir}")
+            self._tmpdirs.clear()
 
     def cleanup_all(self):
         """Cleanup ALL fixtures including session-scoped generators.
         Called at the end of the test session."""
-        for name, gen in self._generators.items():
-            try:
-                next(gen)
-            except StopIteration:
-                pass
-            gen.close()
-        self._generators.clear()
-        for name, agen in self._async_generators.items():
-            try:
-                self._loop.run_until_complete(agen.__anext__())
-            except StopAsyncIteration:
-                pass
-            self._loop.run_until_complete(agen.aclose())
-        self._async_generators.clear()
-        for value in self._cache.values():
-            if hasattr(value, "stop"):
+        with self._lock:
+            for name, gen in self._generators.items():
                 try:
-                    value.stop()
-                except Exception:
+                    next(gen)
+                except StopIteration:
                     pass
-        self._cache.clear()
-        self._active_scopes.clear()
+                gen.close()
+            self._generators.clear()
+            for name, agen in self._async_generators.items():
+                try:
+                    self._loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    pass
+                self._loop.run_until_complete(agen.aclose())
+            self._async_generators.clear()
+            for value in self._cache.values():
+                if hasattr(value, "stop"):
+                    try:
+                        value.stop()
+                    except Exception:
+                        _log_exc("Failed to stop cached fixture during cleanup_all")
+            self._cache.clear()
+            self._active_scopes.clear()
         for tmpdir in self._tmpdirs:
             try:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             except Exception:
-                pass
+                _log_exc(f"Failed to remove tmpdir {tmpdir}")
         self._tmpdirs.clear()
 
     def finish_fixture(self, value):
@@ -476,7 +495,7 @@ class FixtureManager:
             try:
                 shutil.rmtree(d, ignore_errors=True)
             except Exception:
-                pass
+                _log_exc(f"Failed to remove tmp_path_factory dir {d}")
 
     def _fixture_monkeypatch(self):
         mp = MonkeyPatch()

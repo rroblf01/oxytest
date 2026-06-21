@@ -5,6 +5,7 @@ Modules are imported once via _module_cache, fixtures managed per-thread
 via thread-local FixtureManager. RAM stays ~65MB regardless of worker count.
 """
 
+import sys
 import threading
 import os
 import time
@@ -27,7 +28,9 @@ def _worker_thread(batch: List[Any], results: List[Any], results_lock: threading
         try:
             _load_conftest(d)
         except Exception:
-            pass
+            import traceback as _tb
+            _tb.print_exc()
+            print(f"oxytest: warning – failed to load conftest from {d}", file=sys.stderr)
 
     # Patch capsys/capfd in this thread's FixtureManager to avoid replacing global sys.stdout
     from oxytest._fixtures import get_fixture_manager
@@ -41,7 +44,7 @@ def _worker_thread(batch: List[Any], results: List[Any], results_lock: threading
             dur = int((time.time() - t0) * 1000)
         except BaseException as e:
             msg = str(e)
-            if msg.startswith("SKIPPED:") or msg.startswith("RECURSION:"):
+            if msg.upper().startswith("SKIPPED:") or msg.startswith("RECURSION:"):
                 with results_lock:
                     results.append(test_result_passed(test, "", "", max(dur, 0)))
                 continue
@@ -77,12 +80,13 @@ def _patch_capture_fixtures(fm):
     def _noop_capfd(self):
         return _noop
 
-    if 'capsys' in fm._fixtures:
-        fm._fixtures['capsys'] = FixtureDef(_noop_capsys.__get__(fm, type(fm)),
-                                             scope="function", name="capsys")
-    if 'capfd' in fm._fixtures:
-        fm._fixtures['capfd'] = FixtureDef(_noop_capfd.__get__(fm, type(fm)),
-                                           scope="function", name="capfd")
+    with fm._lock:
+        if 'capsys' in fm._fixtures:
+            fm._fixtures['capsys'] = FixtureDef(_noop_capsys.__get__(fm, type(fm)),
+                                                 scope="function", name="capsys")
+        if 'capfd' in fm._fixtures:
+            fm._fixtures['capfd'] = FixtureDef(_noop_capfd.__get__(fm, type(fm)),
+                                               scope="function", name="capfd")
 
 
 def run_tests_parallel(
@@ -140,3 +144,8 @@ def run_tests_parallel(
 
     results.sort(key=lambda r: (r.test.path, r.test.line_no))
     return results
+
+
+__all__ = [
+    "run_tests_parallel",
+]

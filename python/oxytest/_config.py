@@ -21,6 +21,8 @@ def load_config(path=None):
                 with open(path, "rb") as f:
                     data = tomllib.load(f)
             except Exception:
+                import traceback as _tb
+                _tb.print_exc()
                 data = {}
             tool_oxytest = data.get("tool", {}).get("oxytest", {})
             if tool_oxytest:
@@ -120,6 +122,12 @@ def merge_config_with_opts(config_data, opts):
     return merged
 
 
+__all__ = [
+    "load_config",
+    "merge_config_with_opts",
+]
+
+
 def _parse_and_merge(args, opts):
     result = dict(opts)
     i = 0
@@ -134,28 +142,132 @@ def _parse_and_merge(args, opts):
         elif arg == "-k" and i + 1 < len(args):
             i += 1
             result["keyword"] = args[i]
+        elif arg == "-m" and i + 1 < len(args):
+            i += 1
+            result["marker_expr"] = args[i]
         elif arg.startswith("--tb="):
             result["tb_style"] = arg[5:]
         elif arg == "--tb" and i + 1 < len(args):
             i += 1
             result["tb_style"] = args[i]
-        elif arg == "-n" and i + 1 < len(args):
+        elif arg == "-s":
+            result["nocapture"] = True
+        elif arg == "--maxfail" and i + 1 < len(args):
             i += 1
-            if args[i] == "auto":
-                import os
-                result["num_workers"] = os.cpu_count() or 1
-            else:
-                result["num_workers"] = int(args[i])
+            result["maxfail"] = int(args[i])
+        elif arg == "--no-header":
+            result["no_header"] = True
+        elif arg == "--capture" and i + 1 < len(args):
+            i += 1
+            result["capture"] = args[i]
+        elif arg == "--show-capture" and i + 1 < len(args):
+            i += 1
+            result["show_capture"] = args[i]
         elif arg == "--durations" and i + 1 < len(args):
             i += 1
             result["durations"] = int(args[i])
+        elif arg.startswith("-r") and len(arg) > 2:
+            result["report_summary"] = arg[2:]
+        elif arg == "--showlocals":
+            result["showlocals"] = True
+        elif arg == "--strict-markers":
+            result["strict_markers"] = True
+        elif arg == "--rootdir" and i + 1 < len(args):
+            i += 1
+            result["rootdir"] = args[i]
+        elif arg == "--fixtures":
+            result["fixtures_list"] = True
+        elif arg == "--markers":
+            result["markers_list"] = True
+        elif arg == "--setup-show":
+            result["setup_show"] = True
+        elif arg == "--setup-only":
+            result["setup_only"] = True
+        elif arg == "--setup-plan":
+            result["setup_plan"] = True
+        elif arg in ("--lf", "--last-failed"):
+            result["lf"] = True
+        elif arg in ("--ff", "--failed-first"):
+            result["ff"] = True
+        elif arg == "--cache-clear":
+            result["cache_clear"] = True
+        elif arg == "--pdb":
+            result["pdb"] = True
+        elif arg == "--trace":
+            result["trace"] = True
+        elif arg == "--full-trace":
+            result["full_trace"] = True
+        elif arg == "-n" and i + 1 < len(args):
+            i += 1
+            if args[i] == "auto":
+                import os as _os
+                result["num_workers"] = _os.cpu_count() or 1
+            else:
+                result["num_workers"] = int(args[i])
         elif arg in ("-o", "--override-ini") and i + 1 < len(args):
             i += 1
             result.setdefault("override_ini", []).append(args[i])
         elif arg.startswith("--override-ini="):
             result.setdefault("override_ini", []).append(arg.split("=", 1)[1])
-        elif arg.startswith("-r") and len(arg) > 2:
-            result["report_summary"] = arg[2:]
+        elif arg == "--deselect" and i + 1 < len(args):
+            i += 1
+            result.setdefault("deselect", []).append(args[i])
+        elif arg == "--confcutdir" and i + 1 < len(args):
+            i += 1
+            result["confcutdir"] = args[i]
+        elif arg == "--noconftest":
+            result["noconftest"] = True
+        elif arg == "--runxfail":
+            result["runxfail"] = True
+        elif arg == "--strict-config":
+            result["strict_config"] = True
+        elif arg == "--basetemp" and i + 1 < len(args):
+            i += 1
+            result["basetemp"] = args[i]
+        elif arg == "-W" and i + 1 < len(args):
+            i += 1
+            result.setdefault("filterwarnings", []).append(args[i])
+        elif arg == "--import-mode" and i + 1 < len(args):
+            i += 1
+            result["import_mode"] = args[i]
+        elif arg == "--ignore" and i + 1 < len(args):
+            i += 1
+            result.setdefault("ignore", []).append(args[i])
+        elif arg == "--ignore-glob" and i + 1 < len(args):
+            i += 1
+            result.setdefault("ignore_glob", []).append(args[i])
+        elif arg in ("--collect-only", "--co"):
+            result["collect_only"] = True
+        elif arg == "--continue-on-collection-errors":
+            result["continue_on_collection_errors"] = True
+        elif arg == "--color" and i + 1 < len(args):
+            i += 1
+            result["color"] = args[i]
+        elif arg == "--code-highlight":
+            result["code_highlight"] = True
+        elif arg == "--stepwise":
+            result["stepwise"] = True
+        elif arg == "--stepwise-skip":
+            result["stepwise_skip"] = True
+        elif arg == "--doctest-modules":
+            result["doctest_modules"] = True
+        elif arg == "--doctest-glob" and i + 1 < len(args):
+            i += 1
+            result.setdefault("doctest_glob", []).append(args[i])
+        elif arg == "--doctest-continue-on-error":
+            result["doctest_continue_on_error"] = True
+        elif arg == "--log-level" and i + 1 < len(args):
+            i += 1
+            result["log_level"] = args[i]
+        elif arg == "--log-format" and i + 1 < len(args):
+            i += 1
+            result["log_format"] = args[i]
+        elif arg == "--log-cli-level" and i + 1 < len(args):
+            i += 1
+            result["log_cli_level"] = args[i]
+        elif arg == "--junitxml" and i + 1 < len(args):
+            i += 1
+            result["junitxml"] = args[i]
         elif arg == "--cov":
             if i + 1 < len(args) and not args[i + 1].startswith("-"):
                 i += 1

@@ -17,17 +17,33 @@ def _has_doctest_docstring(node):
     return ">>>" in docstring
 
 
-def _collect_doctests_from_node(node, module_name: str, parent_name: str, results: list):
-    """Recursively collect doctest locations from AST nodes."""
+def _collect_doctests_from_node(node, module_name: str, parent_path: str, results: list):
+    """Recursively collect doctest locations from AST nodes.
+    
+    parent_path is the full dotted path from the module root to this node,
+    excluding the node's own name (e.g. ``"mymod"`` for a module-level function).
+    """
     if _has_doctest_docstring(node):
         name = getattr(node, 'name', '')
-        full_name = f"{module_name}.{name}" if name else module_name
+        if parent_path and name:
+            full_name = f"{parent_path}.{name}"
+        elif name:
+            full_name = f"{module_name}.{name}"
+        else:
+            full_name = module_name
         lineno = getattr(node, 'lineno', 1)
         results.append((full_name, lineno))
+    # Build the path to use as prefix for child nodes
+    current_name = getattr(node, 'name', '')
+    if parent_path and current_name:
+        child_prefix = f"{parent_path}.{current_name}"
+    elif current_name:
+        child_prefix = f"{module_name}.{current_name}"
+    else:
+        child_prefix = module_name
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            child_name = getattr(child, 'name', '')
-            _collect_doctests_from_node(child, module_name, child_name, results)
+            _collect_doctests_from_node(child, module_name, child_prefix, results)
 
 
 def collect_module_doctests(filepath: str) -> list[tuple[str, int]]:
@@ -135,3 +151,10 @@ def execute_doctest(filepath: str, name: str):
         with redirect_stdout(output_buf), redirect_stderr(output_buf):
             runner.summarize()
         raise AssertionError(f"DOCTEST_FAIL:{failures} doctest(s) failed in {func_name}\n{output_buf.getvalue()}")
+
+
+__all__ = [
+    "collect_module_doctests",
+    "make_doctest_items",
+    "execute_doctest",
+]

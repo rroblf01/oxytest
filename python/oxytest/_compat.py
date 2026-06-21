@@ -6,6 +6,7 @@ import time
 import socket
 import threading
 import pathlib
+import traceback
 import xml.etree.ElementTree as ET
 from decimal import Decimal
 from datetime import datetime, timedelta as Timedelta
@@ -27,6 +28,18 @@ from oxytest._config import load_config, merge_config_with_opts
 import importlib.util
 import inspect
 import json
+
+
+_LOG_PREFIX = "oxytest: warning"
+
+
+def _log_exc(msg: str = "") -> None:
+    """Log an exception with traceback to stderr."""
+    tb = traceback.format_exc()
+    if tb and tb != "NoneType: None\n":
+        print(f"{_LOG_PREFIX}: {msg} {tb.strip().split(chr(10))[-1]}", file=sys.stderr)
+    elif msg:
+        print(f"{_LOG_PREFIX}: {msg}", file=sys.stderr)
 
 
 Exit = SystemExit
@@ -742,6 +755,7 @@ class TerminalReporter:
         self.failures: List[TestResult] = []
         self.errors: List[TestResult] = []
         self.skipped: List[TestResult] = []
+        self.warnings: List[str] = []
         self.start_time = 0.0
         self.end_time = 0.0
 
@@ -758,7 +772,7 @@ class TerminalReporter:
             self.stats["passed"] += 1
         else:
             err = result.error or ""
-            if "SKIPPED:" in err:
+            if "SKIPPED:" in err.upper():
                 self.stats["skipped"] += 1
                 self.skipped.append(result)
             elif "XFAIL:" in err:
@@ -770,9 +784,18 @@ class TerminalReporter:
                 self.stats["failed"] += 1
                 self.failures.append(result)
 
+        # Capture warnings from test output for -rw summary
+        out = result.output or ""
+        err = result.error or ""
+        for text in (out, err):
+            if "Warning" in text or "warning" in text:
+                for line in text.split("\n"):
+                    if "Warning" in line or "warning" in line:
+                        self.warnings.append(line.strip())
+
         if self.verbose:
             err = result.error or ""
-            if "SKIPPED:" in err:
+            if "SKIPPED:" in err.upper():
                 status = "SKIPPED"
             elif "XFAIL:" in err:
                 status = "XFAIL"
@@ -887,6 +910,8 @@ class Config:
         self.basetemp = opts.get("basetemp", None)
         self._stash_data: dict = {}
         self._benchmarksession = None
+        self._collected_items: list = []
+        self._test_results: list = []
         self.trace = _TraceStub()
 
     @property
@@ -980,8 +1005,10 @@ class _ConfigStash:
                     value = AssertionState(_FakeConfig(), "rewrite")  # ty: ignore
                     self._data[key] = value
                     return value
-            except Exception:
+            except ImportError:
                 pass
+            except Exception:
+                _log_exc("Failed to create AssertionState in __getitem__")
             self._data[key] = {}
         return self._data[key]
 
@@ -1005,8 +1032,10 @@ class _ConfigStash:
                     trace = _Trace()
                 self._data[key] = AssertionState(_FakeConfig(), "rewrite")  # ty: ignore
                 return self._data[key]
-            except Exception:
+            except ImportError:
                 pass
+            except Exception:
+                _log_exc("Failed to create AssertionState in get")
         return default
 
 
@@ -1476,6 +1505,14 @@ def _run_tests(
     stepwise_skip: bool = False,
     setup_only: bool = False,
     setup_plan: bool = False,
+    full_trace: bool = False,
+    show_capture: Optional[str] = None,
+    strict_config: bool = False,
+    color: Optional[str] = None,
+    code_highlight: bool = False,
+    log_level: Optional[str] = None,
+    log_format: Optional[str] = None,
+    log_cli_level: Optional[str] = None,
 ) -> int:
     pm = None
     if config is not None:
@@ -1549,7 +1586,7 @@ def _run_tests(
                         dt_items = make_doctest_items(t.path, None)
                         all_tests.extend(dt_items)
                     except Exception:
-                        pass
+                        _log_exc(f"Failed to collect doctests from {t.path}")
         _load_conftest(path, config=config, confcutdir=confcutdir, noconftest=noconftest)
         for _test in tests:
             _tdir = os.path.dirname(os.path.abspath(_test.path))
@@ -1559,6 +1596,9 @@ def _run_tests(
     if pm:
         for t in all_tests:
             pm.hook.pytest_itemcollected(item=t)
+
+    if config is not None:
+        config._collected_items = all_tests
 
     if has_expr:
         all_tests = _filter_keyword_expression(all_tests, keyword)
@@ -1656,7 +1696,7 @@ def _run_tests(
                 with open(_stepwise_file) as _sf:
                     _stepwise_failed = _sf.read().strip()
             except Exception:
-                pass
+                _log_exc("Failed to read stepwise cache")
         if _stepwise_failed and not stepwise_skip:
             _found = False
             _stepwise_filtered = []
@@ -1762,6 +1802,9 @@ def _run_tests(
 
     exitcode = reporter.get_exit_code()
 
+    if config is not None:
+        config._test_results = results
+
     if pm:
         pm.hook.pytest_sessionfinish(session=config, exitstatus=exitcode)
 
@@ -1789,8 +1832,13 @@ def _clear_cache():
         shutil.rmtree(cache_dir, ignore_errors=True)
 
 
-def _format_assert_detail(source_line: str, filename: str, lineno: int) -> str:
-    """Extract values from an assertion expression for a helpful error message."""
+def _format_assert_detail(source_line: str, filename: str, lineno: int,
+                           _locals: Optional[dict] = None, _globals: Optional[dict] = None) -> str:
+    """Extract values from an assertion expression for a helpful error message.
+    
+    If _locals and _globals are provided, actual runtime values are shown
+    and the pytest_assertrepr_compare hook receives real values instead of source strings.
+    """
     import ast
     try:
         tree = ast.parse(source_line, filename=filename)
@@ -1801,34 +1849,86 @@ def _format_assert_detail(source_line: str, filename: str, lineno: int) -> str:
     stmt = tree.body[0]
     if not isinstance(stmt, ast.Assert):
         return source_line
+
+    def _try_eval(expr_node):
+        """Evaluate an AST expression node in the failure frame context."""
+        if _locals is not None and _globals is not None:
+            try:
+                expr = ast.Expression(body=expr_node)
+                ast.copy_location(expr, expr_node)
+                code = compile(expr, filename, "eval")
+                return eval(code, _globals, _locals)
+            except Exception:
+                return None
+        return None
+
+    from oxytest._assert import _saferepr
+
+    def _val_str(expr_node):
+        """Get a string representation of the actual value, or the source text."""
+        val = _try_eval(expr_node)
+        if val is not None:
+            try:
+                return _saferepr(val)
+            except Exception:
+                return ast.unparse(expr_node)
+        return ast.unparse(expr_node)
+
     test = stmt.test
     parts = [source_line]
-    if isinstance(test, ast.Compare) and len(test.ops) == 1:
-        left = test.left
-        right = test.comparators[0]
-        op = test.ops[0]
-        op_str = {
-            ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=",
-            ast.Gt: ">", ast.GtE: ">=", ast.Is: "is", ast.IsNot: "is not",
-            ast.In: "in", ast.NotIn: "not in",
-        }.get(type(op), "")
-        if op_str:
-            # Try pytest_assertrepr_compare hook for custom explanations
-            try:
-                from oxytest._plugin import get_plugin_manager
-                _pm = get_plugin_manager()
-                _hook_result = _pm.hook.pytest_assertrepr_compare(
-                    config=None, op=op_str, left=ast.unparse(left), right=ast.unparse(right)
-                )
-                if _hook_result:
-                    for line in _hook_result:
-                        if line:
-                            parts.extend(line if isinstance(line, list) else [str(line)])
-            except Exception:
-                pass
-            parts.append(f"{ast.unparse(left)} {op_str} {ast.unparse(right)}")
-    elif isinstance(test, ast.Call) and isinstance(test.func, ast.Name) and test.func.id in ("isinstance", "hasattr"):
+
+    if isinstance(test, ast.Compare):
+        # Handle chained comparisons: a < b < c
+        exprs = [test.left] + list(test.comparators)
+        ops = test.ops
+        for i, op_node in enumerate(ops):
+            left = exprs[i]
+            right = exprs[i + 1]
+            op_str = {
+                ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=",
+                ast.Gt: ">", ast.GtE: ">=", ast.Is: "is", ast.IsNot: "is not",
+                ast.In: "in", ast.NotIn: "not in",
+            }.get(type(op_node), ast.unparse(op_node))
+            # Try pytest_assertrepr_compare hook with actual values
+            if _locals is not None and _globals is not None:
+                left_val = _try_eval(left)
+                right_val = _try_eval(right)
+            else:
+                left_val = None
+                right_val = None
+            if left_val is not None and right_val is not None and op_str:
+                try:
+                    from oxytest._plugin import get_plugin_manager
+                    _pm = get_plugin_manager()
+                    _hook_result = _pm.hook.pytest_assertrepr_compare(
+                        config=None, op=op_str, left=left_val, right=right_val
+                    )
+                    if _hook_result:
+                        for line in _hook_result:
+                            if line:
+                                parts.extend(line if isinstance(line, list) else [str(line)])
+                except Exception:
+                    _log_exc("pytest_assertrepr_compare hook failed")
+            actual = _val_str(left)
+            other = _val_str(right)
+            parts.append(f"{actual} {op_str} {other}")
+        if not parts:
+            parts.append(ast.unparse(test))
+    elif isinstance(test, ast.BoolOp):
+        for val in test.values:
+            parts.append(_val_str(val))
+    elif isinstance(test, ast.Call):
         parts.append(ast.unparse(test))
+        if _locals is not None:
+            for arg in test.args:
+                av = _try_eval(arg)
+                if av is not None:
+                    parts.append(f"  {ast.unparse(arg)} = {_saferepr(av)}")
+    elif isinstance(test, ast.UnaryOp):
+        parts.append(_val_str(test.operand))
+    elif isinstance(test, ast.BinOp):
+        parts.append(_val_str(test.left))
+        parts.append(_val_str(test.right))
     else:
         parts.append(ast.unparse(test))
     return "\n".join(parts)
@@ -1954,9 +2054,12 @@ def _print_summary(reporter, chars):
             for r in reporter.skipped:
                 summary_lines.append(f"  SKIP {r.test.path}::{r.test.name}")
         elif ch == "x":
-            pass  # xfail — not tracked yet
+            for r in reporter.skipped:
+                if r.error and "XFAIL:" in r.error.upper():
+                    summary_lines.append(f"  XFAIL {r.test.path}::{r.test.name}")
         elif ch == "w":
-            pass  # warnings — not tracked yet
+            for w in reporter.warnings:
+                summary_lines.append(f"  WARN {w}")
     if summary_lines:
         print()
         print("=" * 60)
@@ -2029,7 +2132,7 @@ def _write_junitxml(reporter: TerminalReporter, path: str):
         tc.set("name", result.test.name)
         tc.set("time", f"{result.duration_ms / 1000:.3f}")
         err = result.error or ""
-        if not result.passed and "SKIPPED:" in err:
+        if not result.passed and "SKIPPED:" in err.upper():
             ET.SubElement(tc, "skipped")
         elif not result.passed and "XFAIL:" in err:
             sk = ET.SubElement(tc, "skipped")
@@ -2236,6 +2339,14 @@ def main(args: Optional[List[str]] = None) -> int:
         stepwise_skip=opts.get("stepwise_skip", False),
         setup_only=opts.get("setup_only", False),
         setup_plan=opts.get("setup_plan", False),
+        full_trace=opts.get("full_trace", False),
+        show_capture=opts.get("show_capture", None),
+        strict_config=opts.get("strict_config", False),
+        color=opts.get("color", None),
+        code_highlight=opts.get("code_highlight", False),
+        log_level=opts.get("log_level", None),
+        log_format=opts.get("log_format", None),
+        log_cli_level=opts.get("log_cli_level", None),
     )
 
     if cov_plugin:
@@ -2259,8 +2370,10 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
             from _pytest.assertion.rewrite import assertstate_key
             from _pytest.assertion import AssertionState
             config._stash_data[assertstate_key] = AssertionState(config, "rewrite")  # ty: ignore
-        except Exception:
+        except ImportError:
             pass
+        except Exception:
+            _log_exc("Failed to set up AssertionState for conftest")
 
     dirpath = os.path.abspath(root_dir) if os.path.isdir(root_dir) else os.path.dirname(os.path.abspath(root_dir))
     seen = getattr(_conftest_seen, 'dirs', None)
@@ -2273,6 +2386,7 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
             break
         seen.add(dirpath)
         conftest_path = os.path.join(dirpath, "conftest.py")
+        _conftest_import_ok = True
         if os.path.isfile(conftest_path):
             module_name = os.path.relpath(conftest_path).replace("/", ".").replace("\\", ".").rstrip(".py").lstrip(".")
             import importlib.util
@@ -2298,7 +2412,7 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
                             _tb.print_exc()
                             sys.modules.pop(module_name, None)
                             mod = None
-            if mod is not None and spec and spec.loader:
+            if mod is not None:
                 fm.register_from_module(mod)
                 pm.load_conftest_plugins(mod, dirpath)
                 # Support pytest_plugins variable in conftest
@@ -2312,6 +2426,10 @@ def _load_conftest(root_dir: str, config: Optional['Config'] = None, confcutdir:
                             pm.register(_plugin_entry, name=getattr(_plugin_entry, '__name__', str(_plugin_entry)))
                             from oxytest._fixtures import get_fixture_manager as _gfm
                             _gfm().register_from_module(_plugin_entry)
+            else:
+                _conftest_import_ok = False
+        if not _conftest_import_ok:
+            seen.discard(dirpath)
         parent = os.path.dirname(dirpath)
         if parent == dirpath:
             break
@@ -2406,15 +2524,21 @@ def _set_test_full_id(func, test_id: str):
 def _execute_test(path: str, name: str, args_json: str):
     """Import module, resolve fixtures, and run a single test.
     Raises on failure (caught by Rust runner).
+    Captures warnings emitted during the test.
     """
     import sys as _sys
     import os as _os
+    import warnings as _warnings
     _saved_path = list(_sys.path)
     _saved_cwd = _os.getcwd()
     if _sys.getrecursionlimit() < 10000:
         _sys.setrecursionlimit(10000)  # Prevent RecursionError in deep schema recursion
+    _warning_messages = []
     try:
-        _execute_test_impl(path, name, args_json)
+        with _warnings.catch_warnings(record=True) as _captured:
+            _warnings.simplefilter("always")
+            _execute_test_impl(path, name, args_json)
+            _warning_messages = [str(w.message) for w in _captured if w.message]
     except SkipTest as e:
         raise Exception("SKIPPED:" + str(e))
     except RecursionError as e:
@@ -2424,6 +2548,9 @@ def _execute_test(path: str, name: str, args_json: str):
         _sys.path[:] = _saved_path
         if _os.getcwd() != _saved_cwd:
             _os.chdir(_saved_cwd)
+        if _warning_messages:
+            msg = "; ".join(_warning_messages)
+            print(f"[oxytest] warnings captured: {msg}")
 
 
 def _execute_test_impl(path: str, name: str, args_json: str):
@@ -2515,7 +2642,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         try:
             param_values = json.loads(args_json)
         except Exception:
-            pass
+            _log_exc(f"Failed to parse args_json for {name}")
     cache_key = (filepath, name)
     _fixture_params = None
     if cache_key in _parametrize_cache:
@@ -2705,7 +2832,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
             except SkipTest:
                 raise
             except Exception:
-                pass
+                _log_exc(f"Failed to resolve autouse fixture {fname}")
 
     # 4b. Resolve usefixtures from function marks and class marks
     extra_fixtures = []
@@ -2798,20 +2925,23 @@ def _execute_test_impl(path: str, name: str, args_json: str):
         tb_list = _tb.extract_tb(sys.exc_info()[2])
 
         showlocals = os.environ.get("OXYTEST_SHOWLOCALS") == "1"
-        if showlocals:
-            tb_obj = sys.exc_info()[2]
-            while tb_obj:
-                frame = tb_obj.tb_frame
-                if frame.f_code.co_filename == func.__code__.co_filename:
-                    locals_str = "\n".join(
-                        f"  {k} = {v!r}"
-                        for k, v in sorted(frame.f_locals.items())
-                        if not k.startswith("_")
-                    )
-                    if locals_str:
-                        locals_str = "\n" + locals_str
-                    break
-                tb_obj = tb_obj.tb_next
+        assert_frame = None
+        tb_obj = sys.exc_info()[2]
+        while tb_obj:
+            candidate = tb_obj.tb_frame
+            if candidate.f_code.co_filename == func.__code__.co_filename:
+                assert_frame = candidate
+                break
+            tb_obj = tb_obj.tb_next
+        locals_str = ""
+        if showlocals and assert_frame is not None:
+            locals_str = "\n".join(
+                f"  {k} = {v!r}"
+                for k, v in sorted(assert_frame.f_locals.items())
+                if not k.startswith("_")
+            )
+            if locals_str:
+                locals_str = "\n" + locals_str
 
         if tb_list:
             last = tb_list[-1]
@@ -2821,7 +2951,12 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 if last.lineno and last.lineno <= len(lines):
                     source_line = lines[last.lineno - 1].strip()
                     orig_msg = str(sys.exc_info()[1])
-                    _enhanced_msg = _format_assert_detail(source_line, last.filename, last.lineno)
+                    _locals = assert_frame.f_locals if assert_frame is not None else None
+                    _globals = assert_frame.f_globals if assert_frame is not None else None
+                    _enhanced_msg = _format_assert_detail(
+                        source_line, last.filename, last.lineno,
+                        _locals=_locals, _globals=_globals,
+                    )
                     if orig_msg and orig_msg != _enhanced_msg:
                         _enhanced_msg += "\n" + orig_msg
                     if showlocals and locals_str:
@@ -2851,7 +2986,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 if hasattr(_rsp_inst, 'properties') and _rsp_inst.properties:
                     _junit_testsuite_props[(filepath, name)] = list(_rsp_inst.properties)
         except Exception:
-            pass
+            _log_exc("Failed to collect JUnit XML metadata")
         fm.cleanup()
         # Run finalizers from FixtureRequest
         _req = getattr(fm, '_current_request', None)
@@ -2860,7 +2995,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
                 try:
                     _fn()
                 except Exception:
-                    pass
+                    _log_exc("Finalizer failed")
             _req._finalizers.clear()
         fm._current_request = None
         fm._current_request_param = None
@@ -2868,7 +3003,7 @@ def _execute_test_impl(path: str, name: str, args_json: str):
             try:
                 instance.tearDown()
             except Exception:
-                pass
+                _log_exc("tearDown failed")
         # Clean up test modules from sys.modules (tracked by _loaded_modules for O(1))
         import sys as _sys_cleanup
         for _mod_name in _loaded_modules:
@@ -2905,7 +3040,7 @@ def _ensure_parent_packages(filepath: str, module_name: str, loaded: list[str]):
                     loaded.append(prefix)
                     pkg_spec.loader.exec_module(pkg_mod)
             except Exception:
-                pass
+                _log_exc(f"Failed to load parent package {prefix}")
 
 
 def _unwrap_param(p):

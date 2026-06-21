@@ -198,6 +198,8 @@ class PluginManager:
             from importlib.metadata import entry_points
             eps = entry_points(group="pytest11")
         except Exception:
+            import traceback as _tb
+            _tb.print_exc()
             return
 
         for ep in eps:
@@ -288,6 +290,7 @@ __all__ = [
     "pytest_exception_interact",
     "pytest_enter_pdb",
     "pytest_leave_pdb",
+    "pytest_assertrepr_compare",
     "HookimplMarker",
     "HookspecMarker",
 ]
