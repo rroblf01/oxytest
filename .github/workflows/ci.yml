@@ -60,8 +60,8 @@ jobs:
           uv pip install --system pytest
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --ignore=tests/sample_tests
-          python -m oxytest tests/sample_tests/ -v || true
+          python -m oxytest tests/ --ignore=tests/sample_tests -v
+          python -m oxytest tests/sample_tests/ -v
 
   test-windows:
     runs-on: windows-latest
@@ -89,8 +89,8 @@ jobs:
       - name: Run tests
         shell: pwsh
         run: |
-          python -m pytest tests/ -v --ignore=tests/sample_tests
-          python -m oxytest tests/sample_tests/ -v || true
+          python -m oxytest tests/ --ignore=tests/sample_tests -v
+          python -m oxytest tests/sample_tests/ -v
 
   test-macos:
     runs-on: macos-latest
@@ -115,6 +115,6 @@ jobs:
           uv pip install --system pytest
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --ignore=tests/sample_tests
-          python -m oxytest tests/sample_tests/ -v || true
+          python -m oxytest tests/ --ignore=tests/sample_tests -v
+          python -m oxytest tests/sample_tests/ -v
 
