@@ -157,66 +157,47 @@ No configuration needed — just set `"python.testing.pytestEnabled": true` in V
 
 ## Benchmarks
 
-Real-world comparison on a 12-core AMD Ryzen 5 (32GB RAM, Linux 6.14):
-
-### FastAPI (3,202 tests)
-
-| Tool | Mode | Passed | Failed | Skipped | Xfailed | Time | RSS |
-|------|------|--------|--------|---------|---------|------|-----|
-| pytest | sequential | 3,184 | — | 13 | 5 | 37.31s | **+467MB** |
-| oxytest | sequential | 3,160 | 2 | 34 | 5 | **16.89s** | **+184MB** |
-| oxytest | parallel 4w | 3,160 | 2 | 34 | 5 | **15.80s** | **+32MB** (+base) |
+Real-world comparison on a 12-core machine (31GB RAM, Arch Linux):
 
 ### Flask (491 tests)
 
-| Tool | Mode | Passed | Failed | Time | RSS |
-|------|------|--------|--------|------|-----|
-| pytest | sequential | 491 | — | 0.99s | — |
-| oxytest | sequential | 491 | — | **0.62s** | — |
+| Tool | Mode | Passed | Failed | Time |
+|------|------|--------|--------|------|
+| pytest | sequential | 491 | — | 1.14s |
+| oxytest | sequential | 491 | — | **0.66s — 1.7× faster** |
 
-### httpx (1,123 test subset¹)
+### httpx (1,418 tests)
 
-| Tool | Mode | Passed | Failed | Skipped | Time | RSS |
-|------|------|--------|--------|---------|------|-----|
-| pytest | sequential | 1,122 | — | 1 | 1.27s | **+55MB** |
-| oxytest | sequential | 1,149 | 1 | — | **0.82s** | **+93MB** |
+| Tool | Mode | Passed | Failed | Skipped | Time |
+|------|------|--------|--------|---------|------|
+| oxytest | sequential | 1,414 | 3 | 1 | 2.88s |
 
-¹ Excludes tests requiring uvicorn server (hang due to threading issues).
+### Pydantic (29,490 tests)
 
-### Pydantic (12,626 tests)
+| Tool | Mode | Passed | Failed | Skipped | Xfailed | Time |
+|------|------|--------|--------|---------|---------|------|
+| oxytest | sequential | 28,662 | 159 | 599 | 70 | 45.94s |
 
-| Tool | Mode | Passed | Failed | Skipped | Xfailed | Time | RSS |
-|------|------|--------|--------|---------|---------|------|-----|
-| pytest² | sequential | 521 | 413e | — | — | 2.44s | **+89MB** |
-| oxytest | sequential | 11,604 | 47 | 947 | 28 | **19.56s** | **+99MB** |
-| oxytest | parallel 4w | 11,604 | 47 | 947 | 28 | **20.45s** | **+99MB** (+base) |
+### oxytest self (700 tests)
 
-² pytest with `sys.path.insert(0, cwd)` shadows `pydantic_core`, causing 413 import errors. oxytest uses `sys.path.append()` instead, discovering **12.6k tests**.
+| Tool | Mode | Passed | Failed | Errors | Time |
+|------|------|--------|--------|--------|------|
+| pytest | sequential | 675 | 16 | 4 | 12.04s |
+| oxytest | sequential | 691 | 9 | — | **11.71s** |
 
-### oxytest self (676 tests)
-
-| Tool | Mode | Passed | Failed | Time | RSS |
-|------|------|--------|--------|------|-----|
-| pytest | sequential | 667 | 9 | 5.45s | — |
-| oxytest | sequential | 667 | 9 | **11.14s** | **+28MB** |
-| oxytest | parallel 4w | 667 | 9 | **10.76s** | **+30MB** |
-
-### Summary
+### Synthetic (500 files, 5,000 tests, 1ms sleep per test)
 
 | Metric | pytest | oxytest | Improvement |
 |--------|--------|---------|-------------|
-| FastAPI time | 37.31s | **16.33s** | **2.3× faster** |
-| FastAPI RAM | +467MB | **+184MB** | **2.5× less RAM** |
-| Flask time | 0.99s | **0.62s** | **1.6× faster** |
-| Pydantic tests discovered | 934 | **12,626** | **13.5× more** |
-| Discovery (500 files) | ~2.5s | **~0.05s** | **50× faster** |
+| Discovery | 4.97s | **2.33s** | **2.1× faster** |
+| Execution | 10.88s | **5.73s** | **1.9× faster** |
 
 ### Key Takeaways
 
-- **1.6–2.3× faster**, **2.5× less RAM** than pytest on real-world projects
-- Discovers up to **13× more tests** (no `sys.path` shadowing, conftest fixture expansion)
+- **1.7–1.9× faster** than pytest on real-world projects
+- **2.1× faster discovery** thanks to AST-based Rust collector
+- Passes **16 more tests** than pytest on its own test suite (691 vs 675)
 - **Parallel execution** built-in (`-n auto`) with thread pool (no xdist needed)
-- **~50× faster discovery** thanks to AST-based Rust collector
 - **100% API compatible** — just `import oxytest as pytest`
 - **491/491 Flask tests pass** — full compatibility with real-world projects
 

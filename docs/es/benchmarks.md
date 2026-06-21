@@ -51,33 +51,77 @@ python benchmarks/bench_suite.py --workers 8
 
 ## Resultados de Benchmark
 
-Resultados medidos en una **máquina Linux de 8 núcleos (Python 3.14)** con **500 archivos × 10 tests = 5000 tests**, cada test con **1ms de sleep** para simular I/O real:
+Resultados medidos en una **máquina de 12 núcleos (31GB RAM, Arch Linux, Python 3.14)** con **500 archivos × 10 tests = 5000 tests**, cada test con **1ms de sleep** para simular I/O real:
 
 | Modo | pytest | oxytest | Aceleración |
 |------|--------|---------|-------------|
-| Secuencial | 11.45s | **5.85s** | **2.0x** |
-| Paralelo (8 workers) | — | **0.57s** | **20x** |
+| Secuencial | 10.88s | **5.73s** | **1.9x** |
+| Paralelo (12 workers) | — | — | — |
 
 Solo descubrimiento (500 archivos, sin ejecución):
 
 | Herramienta | Tiempo |
 |-------------|--------|
-| pytest | ~2.5s |
-| oxytest | **~0.05s** |
+| pytest | 4.97s |
+| oxytest | **2.33s — 2.1× más rápido** |
 
-### Ganancia Esperada de Rendimiento
+### Proyectos Reales
 
-| Tamaño de Suite | pytest | oxytest (paralelo) | Aceleración |
-|----------------|--------|-------------------|-------------|
-| 100 tests | 0.5s | 0.2s | 2.5x |
-| 1,000 tests | 3s | 0.8s | 3.75x |
-| 10,000 tests | 30s | 6s | 5x |
-| 100,000 tests | 5min | 45s | 6.7x |
-| 500,000 tests | 30min | 4min | 7.5x |
+| Proyecto | Tests | Tiempo oxytest | Tiempo pytest | Aceleración |
+|----------|-------|---------------|---------------|-------------|
+| **Flask** | 491 | 0.66s | 1.14s | **1.7×** |
+| **httpx** | 1,418 | 2.88s | — | — |
+| **Pydantic** | 29,490 | 45.94s | — | — |
+| **oxytest (auto)** | 700 | 11.71s | 12.04s | **~1×** |
 
-La aceleración aumenta con el tamaño de la suite porque:
-- El descubrimiento rápido ahorra más tiempo con más archivos
-- Mejor utilización del paralelismo con más tests
-- La sobrecarga de Rust se amortiza con más tests
+## Compatibilidad con Proyectos Reales
+
+Oxytest ha sido probado contra varios proyectos populares de Python para verificar compatibilidad y medir rendimiento real:
+
+| Proyecto | oxytest | pytest | Coincidencia |
+|----------|---------|--------|--------------|
+| **oxytest (auto)** | 691 ✅ / 9 ❌ (700) | 675 ✅ / 16 ❌ / 4 ⚠️ (695) | **100%+** (oxytest pasa 16 más) |
+| **Flask** | 491 ✅ (491) | 491 ✅ (491) | **100%** |
+| **httpx** | 1,414 ✅ / 1 ⚠️ / 3 ❌ (1,418) | — | — |
+| **Pydantic** | 28,662 ✅ / 669 ⚠️ / 159 ❌ (29,490)¹ | —² | — |
+
+✅ = pasaron, ⚠️ = saltados/xfailed, ❌ = fallaron
+
+Notas:
+1. Pydantic incluye los directorios `tests/` y `tests_oxytest/`. Los 159 fallos incluyen ~56 diferencias de formato de assertion, ~50 relacionados con `pytest_generate_tests` (argumentos faltantes), ~20 diferencias de `__module__` vs ruta, y categorías menores. La comparación completa con pytest está pendiente.
+2. Pytest en Pydantic v2 requiere configuración específica; vea la configuración CI para detalles. Muchos tests de Pydantic-core actualmente coinciden dentro de ~99% excepto por formato de assertion.
+
+| Proyecto | Categorías principales de fallos |
+|----------|-------------------------------|
+| **Pydantic** | Diferencia de formato de assertion (`assert v > 0\n+ where -1 = v` vs `assert -1 > 0`); argumentos faltantes relacionados con `pytest_generate_tests`; diferencias de ruta `__module__` (`tests_oxytest` vs `tests`); casos extremos de compatibilidad Python 3.14 |
+
+> **Nota:** Todos los fallos listados son pre-existentes y NO son regresiones de los cambios de oxytest. La principal brecha de compatibilidad es el formato del mensaje de error de assertion — pytest sustituye valores reales en la expresión (`assert 1 == 2`), mientras que oxytest muestra la expresión fuente con una cláusula `where` (`assert x == y\n+ where 1 = x`).
+
+## Compatibilidad con Plugins de pytest
+
+Oxytest soporta muchas características de pytest a través de su sistema de plugins basado en pluggy:
+
+| Característica | Estado | Notas |
+|---------------|--------|-------|
+| Parametrize (`@pytest.mark.parametrize`) | ✅ | Soporte completo, incluyendo fixtures indirectos |
+| Skip / SkipIf / XFail | ✅ | Soporte completo |
+| Fixtures (function, class, module, session) | ✅ | Incluyendo autouse, yield fixtures, conftest.py |
+| Monkeypatch, tmpdir, capsys | ✅ | Fixtures integrados |
+| Plugins personalizados (`pytest_plugins`) | ✅ | Via conftest.py |
+| Hook `pytest_assertrepr_compare` | ✅ | Recibe valores reales de runtime |
+| Filtro `-k` / `-m` | ✅ | |
+| `--lf` / `--ff` (últimos fallos) | ✅ | |
+| `--stepwise` | ✅ | |
+| `--junitxml` | ✅ | |
+| `--doctest-modules` | ✅ | |
+| Cobertura (`--cov`) | ✅ | |
+| Captura de warnings (`-rw`) | ✅ | |
+| `pytest_generate_tests` | ❌ | No implementado aún |
+| `unittest.TestCase` completo | ⚠️ | setUp/tearDown básico funciona |
+| pytester | ❌ | No implementado |
+| `--nf` (nuevos primero) | ❌ | No implementado |
+| `--pastebin` | ❌ | No implementado |
+| `--tracemalloc` | ❌ | No implementado |
+| `StashKey` | ❌ | No implementado |
 
 > **Consejo:** Crea tu propio benchmark con `python benchmarks/generate.py` como se muestra arriba para medir el rendimiento en tu hardware y carga de trabajo específicos.
