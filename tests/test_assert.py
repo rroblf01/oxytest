@@ -57,9 +57,11 @@ def test_rewrite_no_assert():
 
 
 def test_loader_add_rewrite_path():
+    import tempfile
+    tmp = tempfile.gettempdir()
     loader = _AssertLoader()
-    loader.add_rewrite_path("/tmp")
-    assert "/tmp" in loader._rewrite_prefixes
+    loader.add_rewrite_path(tmp)
+    assert os.path.normpath(tmp) in loader._rewrite_prefixes
 
 
 def test_loader_no_paths():

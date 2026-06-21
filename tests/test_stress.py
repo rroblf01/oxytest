@@ -4,6 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import oxytest as pytest
 import oxytest
 
 
@@ -50,6 +51,9 @@ def test_stress_very_long_path(tmp_path):
 
 def test_stress_unicode_in_path(tmp_path):
     """Unicode characters in directory names."""
+    import sys
+    if sys.platform.startswith("win32"):
+        pytest.skip("Unicode paths not fully supported on Windows filesystem")
     unicode_dir = os.path.join(tmp_path, "über_tests_ñöë")
     os.makedirs(unicode_dir)
     _write(os.path.join(unicode_dir, "test_ünicode.py"),

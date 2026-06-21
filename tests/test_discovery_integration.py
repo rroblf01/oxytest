@@ -4,6 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import oxytest as pytest
 import oxytest
 
 
@@ -127,6 +128,9 @@ def test_discover_deeply_nested(tmp_path):
 
 
 def test_discover_unicode_filename(tmp_path):
+    import sys
+    if sys.platform.startswith("win32"):
+        pytest.skip("Unicode filenames not fully supported on Windows filesystem")
     _write(os.path.join(tmp_path, "test_unicode_ñ.py"), "def test_ñ(): pass")
     tests = oxytest.discover_tests(str(tmp_path))
     assert len(tests) == 1

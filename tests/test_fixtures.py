@@ -837,10 +837,12 @@ def test_fm_register_from_module_wrapped_has_oxytest_fixture():
 def test_monkeypatch_setattr_dotted():
     mp = MonkeyPatch()
     import os as _os
+    import os as _os2
+    orig_sep = _os2.path.sep
     mp.setattr("os.path.sep", "/custom")
     assert _os.path.sep == "/custom"
     mp.undo()
-    assert _os.path.sep == "/"
+    assert _os.path.sep == orig_sep
 
 
 def test_monkeypatch_setattr_builtins():

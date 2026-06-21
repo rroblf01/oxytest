@@ -1524,7 +1524,7 @@ def _run_tests(
         if cache_clear:
             _clear_cache()
 
-    root_paths = [rootdir] if rootdir else paths
+    root_paths = [os.path.abspath(os.path.normpath(p)) for p in ([rootdir] if rootdir else paths)]
 
     _module_cache_clear()
     from oxytest._fixtures import get_fixture_manager as _get_fm
