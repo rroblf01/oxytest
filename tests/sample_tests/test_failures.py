@@ -1,3 +1,7 @@
+import oxytest as pytest
+
+pytestmark = pytest.mark.xfail()
+
 def test_assert_eq():
     x = 1
     y = 2

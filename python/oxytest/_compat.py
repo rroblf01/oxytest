@@ -701,7 +701,7 @@ def _is_xfail(func, cls=None, mod=None):
                         condition = m.kwargs.get("condition")
                         if condition is None or condition:
                             strict = m.kwargs.get("strict", True)
-                            return m.kwargs.get("reason", ""), strict
+                            return (m.kwargs.get("reason") or ""), strict
     # Also check module-level pytestmark attribute
     if mod is not None:
         mod_marks = getattr(mod, "pytestmark", None)
@@ -714,7 +714,7 @@ def _is_xfail(func, cls=None, mod=None):
                         condition = m.kwargs.get("condition")
                         if condition is None or condition:
                             strict = m.kwargs.get("strict", True)
-                            return m.kwargs.get("reason", ""), strict
+                            return (m.kwargs.get("reason") or ""), strict
     return None
 
 
