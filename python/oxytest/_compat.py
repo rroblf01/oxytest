@@ -2530,7 +2530,11 @@ def _execute_test(path: str, name: str, args_json: str):
     import os as _os
     import warnings as _warnings
     _saved_path = list(_sys.path)
-    _saved_cwd = _os.getcwd()
+    try:
+        _saved_cwd = _os.getcwd()
+    except FileNotFoundError:
+        _saved_cwd = _original_cwd or _os.path.expanduser("~")
+        _os.chdir(_saved_cwd)
     if _sys.getrecursionlimit() < 10000:
         _sys.setrecursionlimit(10000)  # Prevent RecursionError in deep schema recursion
     _warning_messages = []
@@ -2546,7 +2550,10 @@ def _execute_test(path: str, name: str, args_json: str):
         raise Exception("RECURSION:" + str(e))
     finally:
         _sys.path[:] = _saved_path
-        if _os.getcwd() != _saved_cwd:
+        try:
+            if _os.getcwd() != _saved_cwd:
+                _os.chdir(_saved_cwd)
+        except FileNotFoundError:
             _os.chdir(_saved_cwd)
         if _warning_messages:
             msg = "; ".join(_warning_messages)
