@@ -349,7 +349,7 @@ def test_monkeypatch_chdir(tmp_path):
     mp = MonkeyPatch()
     original = os.getcwd()
     mp.chdir(str(tmp_path))
-    assert os.getcwd() == str(tmp_path)
+    assert os.path.realpath(os.getcwd()) == os.path.realpath(str(tmp_path))
     mp.undo()
     assert os.getcwd() == original
 
